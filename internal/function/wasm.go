@@ -22,6 +22,8 @@ type Engine struct {
 	runtime  wazero.Runtime
 	wasiOnce sync.Once
 	wasiErr  error
+	hostOnce sync.Once
+	hostErr  error
 }
 
 // NewEngine creates an Engine. The caller must call Close when done.
@@ -91,7 +93,9 @@ func (e *Engine) Invoke(ctx context.Context, wasmPath string, timeout time.Durat
 // InvokeWASI loads and runs a WASI preview1 WASM module (e.g. compiled with
 // GOOS=wasip1 GOARCH=wasm). The module's main() is called automatically on
 // instantiation; stdout is captured and returned. Exit code 0 is success.
-func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.Duration) ([]byte, error) {
+// If deps is non-nil, the "flagbase" host module is registered once and host
+// functions (storage, flag evaluation, etc.) become available to WASM code.
+func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps) ([]byte, error) {
 	// Instantiate the WASI host module once per runtime lifetime.
 	e.wasiOnce.Do(func() {
 		_, e.wasiErr = wasi_snapshot_preview1.NewBuilder(e.runtime).Instantiate(ctx)
@@ -100,8 +104,20 @@ func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.
 		return nil, fmt.Errorf("initialising wasi: %w", e.wasiErr)
 	}
 
+	if deps != nil {
+		e.hostOnce.Do(func() {
+			e.hostErr = registerHostModule(ctx, e.runtime, *deps)
+		})
+		if e.hostErr != nil {
+			return nil, fmt.Errorf("initialising host module: %w", e.hostErr)
+		}
+	}
+
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	st := &invState{}
+	execCtx = context.WithValue(execCtx, invStateKey{}, st)
 
 	compiled, err := e.runtime.CompileModule(execCtx, wasmBytes)
 	if err != nil {

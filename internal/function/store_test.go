@@ -41,7 +41,7 @@ func setupStore(t *testing.T) *function.Store {
 	eng := function.NewEngine(ctx)
 	t.Cleanup(func() { eng.Close(ctx) })
 
-	return function.NewStore(db, storage.NewLocalAdapter(dir), eng)
+	return function.NewStore(db, storage.NewLocalAdapter(dir), eng, nil)
 }
 
 func TestStore_CreateAndInvokeJS(t *testing.T) {
