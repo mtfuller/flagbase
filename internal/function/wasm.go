@@ -49,9 +49,30 @@ func (e *Engine) Invoke(ctx context.Context, wasmPath string, timeout time.Durat
 		return nil, fmt.Errorf("wasm module at %s does not export 'handle'", wasmPath)
 	}
 
-	if _, err = handleFn.Call(execCtx); err != nil {
+	results, err := handleFn.Call(execCtx)
+	if err != nil {
 		return nil, fmt.Errorf("wasm execution: %w", err)
 	}
 
-	return []byte("ok"), nil
+	// If the WASM function returns (ptr uint32, size uint32), read that slice
+	// from linear memory. Functions with no return values or a single return
+	// value produce no output bytes.
+	if len(results) < 2 {
+		return []byte{}, nil
+	}
+	ptr := uint32(results[0])
+	size := uint32(results[1])
+	if size == 0 {
+		return []byte{}, nil
+	}
+	buf, ok := mod.Memory().Read(ptr, size)
+	if !ok {
+		return nil, fmt.Errorf("wasm: cannot read output at ptr=%d size=%d (memory size=%d)",
+			ptr, size, mod.Memory().Size())
+	}
+	// Copy because buf is a view into the WASM linear memory which may be
+	// reclaimed once the module is closed.
+	out := make([]byte, size)
+	copy(out, buf)
+	return out, nil
 }

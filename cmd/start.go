@@ -72,7 +72,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 	bgWorker.Start()
 	defer bgWorker.Stop()
 
-	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus)
+	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

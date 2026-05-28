@@ -33,9 +33,10 @@ func NewServer(
 	featureEng *feature.Engine,
 	store *storage.LocalAdapter,
 	bus *event.Bus,
+	metrics MetricRecorder,
 ) *Server {
-	h := &Handlers{IAM: iamSvc, Feature: featureEng}
 	gw := gateway.NewProxyHandler(featureEng)
+	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
@@ -59,6 +60,14 @@ func NewServer(
 		r.Put("/flags/{key}", h.UpdateFlag)
 		r.Delete("/flags/{key}", h.DeleteFlag)
 		r.Get("/flags/{key}/evaluate", h.EvaluateFlag)
+
+		// Metrics — SDK clients post events here
+		r.Post("/metrics", h.RecordMetric)
+
+		// Gateway route management (register/delete require admin role)
+		r.Get("/gateway/routes", h.ListGatewayRoutes)
+		r.With(RequireRole("admin")).Post("/gateway/routes", h.RegisterGatewayRoute)
+		r.With(RequireRole("admin")).Delete("/gateway/routes/{id}", h.DeleteGatewayRoute)
 	})
 
 	// Gateway — dynamic reverse proxy driven by feature flags

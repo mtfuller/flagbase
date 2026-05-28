@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/mtfuller/flagbase/internal/feature"
@@ -12,10 +13,10 @@ import (
 
 // Route maps an incoming path prefix to a backend URL, optionally gated by a feature flag.
 type Route struct {
-	ID         string
-	Pattern    string
-	BackendURL string
-	FlagKey    string // optional: feature flag key that must evaluate true to route
+	ID         string `json:"id"`
+	Pattern    string `json:"pattern"`
+	BackendURL string `json:"backend_url"`
+	FlagKey    string `json:"flag_key,omitempty"` // optional: must evaluate true to route
 }
 
 // ProxyHandler is a context-aware reverse proxy.
@@ -26,6 +27,11 @@ type Route struct {
 //  2. Build evaluation context from claims
 //  3. Evaluate flag → select backend
 //  4. Proxy to backend via httputil.ReverseProxy
+//
+// Routes are registered via RegisterRoute and managed through the REST API at
+// /api/v1/gateway/routes. The handler is mounted at /gateway/*, so patterns
+// should NOT include the /gateway prefix (e.g. register "/v2/checkout" to
+// handle requests arriving at "/gateway/v2/checkout").
 type ProxyHandler struct {
 	FeatureEngine *feature.Engine
 	mu            sync.RWMutex
@@ -40,14 +46,40 @@ func NewProxyHandler(fe *feature.Engine) *ProxyHandler {
 	}
 }
 
-// RegisterRoute adds or replaces a route entry.
+// RegisterRoute adds or replaces a route entry keyed by its Pattern.
 func (p *ProxyHandler) RegisterRoute(route *Route) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.routes[route.Pattern] = route
 }
 
+// RemoveRoute deletes the route with the given ID. Returns true if found.
+func (p *ProxyHandler) RemoveRoute(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for pattern, r := range p.routes {
+		if r.ID == id {
+			delete(p.routes, pattern)
+			return true
+		}
+	}
+	return false
+}
+
+// ListRoutes returns a snapshot of all registered routes.
+func (p *ProxyHandler) ListRoutes() []*Route {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]*Route, 0, len(p.routes))
+	for _, r := range p.routes {
+		out = append(out, r)
+	}
+	return out
+}
+
 // ServeHTTP implements http.Handler.
+// The handler strips the /gateway prefix before matching routes so that a route
+// registered as "/v2/checkout" handles requests to "/gateway/v2/checkout".
 func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	evalCtx := map[string]interface{}{
 		"userId": "anonymous",
@@ -58,8 +90,14 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		evalCtx["role"] = claims.Role
 	}
 
+	// Strip the /gateway mount prefix so stored patterns match cleanly.
+	path := strings.TrimPrefix(r.URL.Path, "/gateway")
+	if path == "" {
+		path = "/"
+	}
+
 	p.mu.RLock()
-	route, found := p.routes[r.URL.Path]
+	route, found := p.routes[path]
 	p.mu.RUnlock()
 
 	if !found {

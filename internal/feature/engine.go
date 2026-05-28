@@ -53,7 +53,11 @@ func (e *Engine) EvaluateBool(key string, ctx map[string]interface{}) bool {
 // CreateFlag persists a new flag (and its rules) and reloads the cache.
 func (e *Engine) CreateFlag(f *Flag) error {
 	if f.ID == "" {
-		f.ID = newID()
+		id, err := newID()
+		if err != nil {
+			return fmt.Errorf("generating flag id: %w", err)
+		}
+		f.ID = id
 	}
 	now := time.Now()
 	f.CreatedAt = now
@@ -179,7 +183,11 @@ func (e *Engine) loadRules(flagKey string) ([]Rule, error) {
 
 func (e *Engine) insertRule(r *Rule) error {
 	if r.ID == "" {
-		r.ID = newID()
+		id, err := newID()
+		if err != nil {
+			return fmt.Errorf("generating rule id: %w", err)
+		}
+		r.ID = id
 	}
 	_, err := e.db.Exec(
 		`INSERT INTO flag_rules (id, flag_key, attribute, operator, value, variant, priority)
@@ -207,8 +215,10 @@ func matchRule(rule Rule, val string) bool {
 	return false
 }
 
-func newID() string {
+func newID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("rand.Read: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }

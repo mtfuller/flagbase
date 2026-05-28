@@ -45,11 +45,14 @@ func NewService(db *sql.DB, jwtSecret string, tokenTTL time.Duration) *Service {
 
 // Register creates a new user account.
 func (s *Service) Register(email, password, role, tenantID string) (*User, error) {
-	id := newID()
+	id, err := newID()
+	if err != nil {
+		return nil, fmt.Errorf("generating user id: %w", err)
+	}
 	hash := hashPassword(password)
 
 	var createdAt time.Time
-	err := s.db.QueryRow(
+	err = s.db.QueryRow(
 		`INSERT INTO users (id, email, password, role, tenant_id) VALUES (?, ?, ?, ?, ?)
          RETURNING id, email, role, tenant_id, created_at`,
 		id, email, hash, role, tenantID,
@@ -123,8 +126,10 @@ func hashPassword(password string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func newID() string {
+func newID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("rand.Read: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
