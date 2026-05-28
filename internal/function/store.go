@@ -43,16 +43,17 @@ func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine) *Store {
 	return &Store{db: db, store: store, engine: engine}
 }
 
-// Create persists a new function record and compiles it synchronously.
+// Create persists a new JavaScript function record and validates it synchronously.
+// For Go/WASM functions, use Upload instead.
 func (s *Store) Create(ctx context.Context, name, description, language, source string) (*Function, error) {
-	id, err := newID()
-	if err != nil {
-		return nil, fmt.Errorf("generating id: %w", err)
-	}
-
 	c, err := compilerFor(language)
 	if err != nil {
 		return nil, err
+	}
+
+	id, err := newID()
+	if err != nil {
+		return nil, fmt.Errorf("generating id: %w", err)
 	}
 
 	fn := &Function{
@@ -87,6 +88,42 @@ func (s *Store) Create(ctx context.Context, name, description, language, source 
 
 	fn.Status = "ready"
 	_ = s.updateStatus(ctx, id, "ready", "", string(result.Runtime))
+	return fn, nil
+}
+
+// Upload persists a pre-compiled WASM artifact. The caller is responsible for
+// compiling Go source to WASI preview1 WASM (e.g. via `flagbase fn build`).
+func (s *Store) Upload(ctx context.Context, name, description string, wasmBytes []byte) (*Function, error) {
+	if len(wasmBytes) < 4 || string(wasmBytes[:4]) != "\x00asm" {
+		return nil, fmt.Errorf("invalid artifact: missing WASM magic number (\\x00asm)")
+	}
+
+	id, err := newID()
+	if err != nil {
+		return nil, fmt.Errorf("generating id: %w", err)
+	}
+
+	fn := &Function{
+		ID:          id,
+		Name:        name,
+		Description: description,
+		Language:    string(compiler.LanguageGo),
+		Runtime:     string(compiler.RuntimeWASM),
+		Status:      "ready",
+	}
+
+	if err := s.insert(ctx, fn); err != nil {
+		return nil, fmt.Errorf("inserting function: %w", err)
+	}
+
+	if err := s.store.PutObject(ctx, functionsBucket, id+".wasm", bytes.NewReader(wasmBytes)); err != nil {
+		fn.Status = "error"
+		fn.Error = fmt.Sprintf("storing artifact: %v", err)
+		_ = s.updateStatus(ctx, id, "error", fn.Error, "")
+		return fn, nil
+	}
+
+	_ = s.updateStatus(ctx, id, "ready", "", string(compiler.RuntimeWASM))
 	return fn, nil
 }
 
@@ -242,11 +279,11 @@ func (s *Store) updateStatus(ctx context.Context, id, status, errMsg, runtime st
 func compilerFor(language string) (compiler.Compiler, error) {
 	switch compiler.Language(language) {
 	case compiler.LanguageGo:
-		return compiler.NewGoCompiler(), nil
+		return nil, fmt.Errorf("Go functions must be pre-compiled to WASM; use `flagbase fn build` then upload via the CLI or multipart API")
 	case compiler.LanguageJavaScript:
 		return compiler.NewJSCompiler(), nil
 	default:
-		return nil, fmt.Errorf("unsupported language: %s (supported: go, javascript)", language)
+		return nil, fmt.Errorf("unsupported language: %s (supported: javascript)", language)
 	}
 }
 

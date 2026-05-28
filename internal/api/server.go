@@ -104,6 +104,7 @@ func NewServer(
 		r.Get("/functions/{id}", fh.GetFunction)
 		r.Delete("/functions/{id}", fh.DeleteFunction)
 		r.Post("/functions/{id}/invoke", fh.InvokeFunction)
+		r.Get("/functions/{id}/scaffold", fh.GetFunctionScaffold)
 	})
 
 	// Admin console SPA (served for all /admin/* paths not matched above)
