@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: starterpack-go-cli
+  BINARY_NAME: flagbase
   VERSION:
     sh: echo "${VERSION:-dev}"
   COMMIT:
@@ -9,9 +9,9 @@ vars:
   BUILD_DATE:
     sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
   LDFLAGS: >-
-    -ldflags "-X github.com/mtfuller/starterpack-go-cli/internal/version.Version={{.VERSION}}
-    -X github.com/mtfuller/starterpack-go-cli/internal/version.Commit={{.COMMIT}}
-    -X github.com/mtfuller/starterpack-go-cli/internal/version.BuildDate={{.BUILD_DATE}}"
+    -ldflags "-X github.com/mtfuller/flagbase/internal/version.Version={{.VERSION}}
+    -X github.com/mtfuller/flagbase/internal/version.Commit={{.COMMIT}}
+    -X github.com/mtfuller/flagbase/internal/version.BuildDate={{.BUILD_DATE}}"
 
 tasks:
   default:
@@ -21,32 +21,32 @@ tasks:
     silent: true
 
   build:
-    desc: Build the binary
+    desc: Build the flagbase binary
     cmds:
       - echo "Building {{.BINARY_NAME}}..."
       - go build {{.LDFLAGS}} -o {{.BINARY_NAME}} main.go
       - echo "Build complete{{":"}} ./{{.BINARY_NAME}}"
+
+  run:
+    desc: Run flagbase (starts the server with default config)
+    cmds:
+      - go run main.go start
 
   test:
     desc: Run all tests (unit + integration)
     deps: [test-unit, test-integration]
 
   test-unit:
-    desc: Run unit tests only
+    desc: Run unit tests
     cmds:
       - echo "Running unit tests..."
       - go test -v ./internal/... ./pkg/...
 
   test-integration:
-    desc: Run integration tests only
+    desc: Run integration tests
     cmds:
       - echo "Running integration tests..."
       - go test -v ./tests/...
-
-  run:
-    desc: Run the application
-    cmds:
-      - go run main.go
 
   clean:
     desc: Remove built binaries
@@ -56,16 +56,20 @@ tasks:
       - go clean
 
   install:
-    desc: Install the binary to GOPATH/bin
+    desc: Install flagbase to GOPATH/bin
     cmds:
       - echo "Installing {{.BINARY_NAME}}..."
       - go install {{.LDFLAGS}}
       - echo "Installed to $(go env GOPATH)/bin/{{.BINARY_NAME}}"
 
   coverage:
-    desc: Run tests with coverage
+    desc: Run tests with coverage report
     cmds:
-      - echo "Running tests with coverage..."
       - go test -coverprofile=coverage.out ./...
       - go tool cover -html=coverage.out -o coverage.html
-      - echo "Coverage report generated{{":"}} coverage.html"
+      - echo "Coverage report{{":"}} coverage.html"
+
+  tidy:
+    desc: Tidy go.mod and go.sum
+    cmds:
+      - go mod tidy
