@@ -70,6 +70,7 @@ func (w *Worker) checkAnomalies() {
 		var flagKey string
 		var cnt int
 		if err := rows.Scan(&flagKey, &cnt); err != nil {
+			logger.Warn("anomaly check: scan row: %v", err)
 			continue
 		}
 		logger.Warn("Anomaly: flag=%s errors=%d in 5m — auto-disabling", flagKey, cnt)
@@ -78,8 +79,8 @@ func (w *Worker) checkAnomalies() {
 			f.Enabled = false
 			if err := w.engine.UpdateFlag(f); err != nil {
 				logger.Error("auto-disable flag %s: %v", flagKey, err)
-			} else {
-				_ = w.bus.Publish("flagbase.flag.disabled", []byte(flagKey))
+			} else if err := w.bus.Publish("flagbase.flag.disabled", []byte(flagKey)); err != nil {
+				logger.Error("publish flag.disabled for %s: %v", flagKey, err)
 			}
 		}
 	}

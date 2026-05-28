@@ -7,13 +7,22 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mtfuller/flagbase/internal/feature"
+	"github.com/mtfuller/flagbase/internal/gateway"
 	"github.com/mtfuller/flagbase/internal/iam"
+	"github.com/mtfuller/flagbase/internal/logger"
 )
+
+// MetricRecorder is the minimal surface the metrics handler needs from the worker.
+type MetricRecorder interface {
+	RecordMetric(flagKey, variant, eventType string, value float64) error
+}
 
 // Handlers groups all HTTP handler methods.
 type Handlers struct {
 	IAM     *iam.Service
 	Feature *feature.Engine
+	Metrics MetricRecorder
+	Gateway *gateway.ProxyHandler
 }
 
 // --- Auth ---
@@ -138,12 +147,79 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// --- Metrics ---
+
+// RecordMetric accepts a metric event from an SDK client and persists it.
+func (h *Handlers) RecordMetric(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlagKey   string  `json:"flag_key"`
+		Variant   string  `json:"variant"`
+		EventType string  `json:"event_type"`
+		Value     float64 `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.FlagKey == "" || req.Variant == "" || req.EventType == "" {
+		writeError(w, http.StatusBadRequest, "flag_key, variant and event_type are required")
+		return
+	}
+	if err := h.Metrics.RecordMetric(req.FlagKey, req.Variant, req.EventType, req.Value); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Gateway route management ---
+
+// ListGatewayRoutes returns all currently registered gateway routes.
+func (h *Handlers) ListGatewayRoutes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.Gateway.ListRoutes())
+}
+
+// RegisterGatewayRoute adds or replaces a gateway route.
+func (h *Handlers) RegisterGatewayRoute(w http.ResponseWriter, r *http.Request) {
+	var route gateway.Route
+	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if route.Pattern == "" || route.BackendURL == "" {
+		writeError(w, http.StatusBadRequest, "pattern and backend_url are required")
+		return
+	}
+	h.Gateway.RegisterRoute(&route)
+	writeJSON(w, http.StatusCreated, route)
+}
+
+// DeleteGatewayRoute removes a route by its ID.
+func (h *Handlers) DeleteGatewayRoute(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !h.Gateway.RemoveRoute(id) {
+		writeError(w, http.StatusNotFound, "route not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- helpers ---
 
+// writeJSON encodes v as JSON into a buffer before writing so that encoding
+// failures can be reported as a proper 500 rather than a truncated response.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		logger.Error("writeJSON: marshal: %v", err)
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if _, err = w.Write(buf); err != nil {
+		logger.Error("writeJSON: write: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
