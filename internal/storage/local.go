@@ -76,4 +76,36 @@ func (a *LocalAdapter) ListObjects(_ context.Context, bucket string) ([]string, 
 	return names, nil
 }
 
+// ListBuckets returns the names of all bucket directories under basePath.
+func (a *LocalAdapter) ListBuckets(_ context.Context) ([]string, error) {
+	entries, err := os.ReadDir(a.basePath)
+	if os.IsNotExist(err) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
+// CreateBucket ensures the bucket directory exists.
+func (a *LocalAdapter) CreateBucket(_ context.Context, bucket string) error {
+	return os.MkdirAll(filepath.Join(a.basePath, bucket), 0o755)
+}
+
+// DeleteBucket removes a bucket directory and all its objects.
+func (a *LocalAdapter) DeleteBucket(_ context.Context, bucket string) error {
+	err := os.RemoveAll(filepath.Join(a.basePath, bucket))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 var _ BucketAdapter = (*LocalAdapter)(nil)

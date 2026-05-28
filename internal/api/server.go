@@ -9,12 +9,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/mtfuller/flagbase/internal/admin"
 	"github.com/mtfuller/flagbase/internal/config"
 	"github.com/mtfuller/flagbase/internal/event"
 	"github.com/mtfuller/flagbase/internal/feature"
 	"github.com/mtfuller/flagbase/internal/gateway"
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/storage"
+	"github.com/mtfuller/flagbase/web"
 )
 
 // Server wraps the HTTP server and all platform services.
@@ -28,15 +30,23 @@ type Server struct {
 // NewServer constructs and wires the HTTP server with all routes.
 func NewServer(
 	cfg *config.Config,
-	_ *sql.DB,
+	db *sql.DB,
 	iamSvc *iam.Service,
 	featureEng *feature.Engine,
 	store *storage.LocalAdapter,
 	bus *event.Bus,
 	metrics MetricRecorder,
+	setupMgr *admin.SetupManager,
 ) *Server {
 	gw := gateway.NewProxyHandler(featureEng)
 	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
+	ah := &AdminHandlers{IAM: iamSvc, Setup: setupMgr, Store: store, DB: db}
+
+	adminHTML, _ := web.FS.ReadFile("index.html")
+	serveAdmin := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(adminHTML) //nolint:errcheck
+	}
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
@@ -51,7 +61,11 @@ func NewServer(
 	r.Post("/auth/register", h.Register)
 	r.Post("/auth/login", h.Login)
 
-	// Feature flag REST API (requires authentication)
+	// First-time setup (public — no admin exists yet)
+	r.Get("/setup/status", ah.SetupStatus)
+	r.Post("/setup", ah.CompleteSetup)
+
+	// Feature flag REST API
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(RequireRole("user"))
 		r.Get("/flags", h.ListFlags)
@@ -60,17 +74,31 @@ func NewServer(
 		r.Put("/flags/{key}", h.UpdateFlag)
 		r.Delete("/flags/{key}", h.DeleteFlag)
 		r.Get("/flags/{key}/evaluate", h.EvaluateFlag)
-
-		// Metrics — SDK clients post events here
 		r.Post("/metrics", h.RecordMetric)
-
-		// Gateway route management (register/delete require admin role)
 		r.Get("/gateway/routes", h.ListGatewayRoutes)
 		r.With(RequireRole("admin")).Post("/gateway/routes", h.RegisterGatewayRoute)
 		r.With(RequireRole("admin")).Delete("/gateway/routes/{id}", h.DeleteGatewayRoute)
 	})
 
-	// Gateway — dynamic reverse proxy driven by feature flags
+	// Admin API (must be registered before the /admin/* SPA catch-all)
+	r.Route("/admin/api", func(r chi.Router) {
+		r.Use(RequireRole("admin"))
+		r.Get("/users", ah.AdminListUsers)
+		r.Delete("/users/{id}", ah.AdminDeleteUser)
+		r.Get("/metrics/summary", ah.AdminMetricsSummary)
+		r.Get("/storage/buckets", ah.AdminListBuckets)
+		r.Post("/storage/buckets", ah.AdminCreateBucket)
+		r.Delete("/storage/buckets/{bucket}", ah.AdminDeleteBucket)
+	})
+
+	// Admin console SPA (served for all /admin/* paths not matched above)
+	r.Get("/admin", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+	})
+	r.Get("/admin/", serveAdmin)
+	r.Get("/admin/*", serveAdmin)
+
+	// Gateway — dynamic reverse proxy
 	r.Handle("/gateway/*", gw)
 
 	srv := &Server{
