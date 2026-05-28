@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mtfuller/starterpack-go-cli/internal/color"
-	"github.com/mtfuller/starterpack-go-cli/internal/logger"
-	"github.com/mtfuller/starterpack-go-cli/internal/spinner"
+	"github.com/mtfuller/flagbase/internal/color"
+	"github.com/mtfuller/flagbase/internal/logger"
+	"github.com/mtfuller/flagbase/internal/spinner"
 )
 
-// ProcessData is an example function that demonstrates spinner and logging
+// ProcessData demonstrates spinner and logging utilities.
 func ProcessData(items []string, verbose bool) error {
 	if verbose {
 		logger.SetLevel(logger.DEBUG)
@@ -21,7 +21,6 @@ func ProcessData(items []string, verbose bool) error {
 	s := spinner.New("Processing items...")
 	s.Start()
 
-	// Simulate processing
 	time.Sleep(2 * time.Second)
 
 	s.Stop()
@@ -30,12 +29,12 @@ func ProcessData(items []string, verbose bool) error {
 	return nil
 }
 
-// Greet is a simple greeting function
+// Greet returns a simple greeting string.
 func Greet(name string) string {
 	return fmt.Sprintf("Hello, %s!", name)
 }
 
-// Calculate performs a simple calculation
+// Calculate performs an arithmetic operation.
 func Calculate(a, b int, operation string) (int, error) {
 	switch operation {
 	case "add":
