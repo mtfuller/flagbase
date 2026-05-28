@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mtfuller/flagbase/internal/admin"
 	"github.com/mtfuller/flagbase/internal/api"
 	"github.com/mtfuller/flagbase/internal/color"
 	"github.com/mtfuller/flagbase/internal/config"
@@ -30,7 +31,8 @@ var startCmd = &cobra.Command{
   • NATS message bus
   • Feature flag evaluation engine
   • Context-aware gateway proxy
-  • Anomaly-detection background worker`,
+  • Anomaly-detection background worker
+  • Admin console at /admin/`,
 	RunE: runStart,
 }
 
@@ -72,13 +74,35 @@ func runStart(_ *cobra.Command, _ []string) error {
 	bgWorker.Start()
 	defer bgWorker.Stop()
 
-	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker)
+	setupMgr := admin.NewSetupManager()
+
+	adminCount, err := iamSvc.CountAdmins()
+	if err != nil {
+		return fmt.Errorf("checking admin count: %w", err)
+	}
+	if adminCount == 0 {
+		token, err := setupMgr.GenerateToken()
+		if err != nil {
+			return fmt.Errorf("setup token: %w", err)
+		}
+		fmt.Println()
+		fmt.Println(color.Bold(color.Yellow("  ┌─────────────────────────────────────────────────────────────┐")))
+		fmt.Println(color.Bold(color.Yellow("  │              FLAGBASE ADMIN SETUP REQUIRED                  │")))
+		fmt.Println(color.Bold(color.Yellow("  └─────────────────────────────────────────────────────────────┘")))
+		fmt.Printf(color.Cyan("  Admin console: ")+color.Bold("http://%s:%d/admin/setup\n"), cfg.Server.Host, cfg.Server.Port)
+		fmt.Printf(color.Cyan("  Setup token:   ")+color.Bold("%s\n"), token)
+		fmt.Println(color.Yellow("  Token expires in 15 minutes. Keep it secret."))
+		fmt.Println()
+	}
+
+	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		color.Success("flagbase is running → http://%s:%d", cfg.Server.Host, cfg.Server.Port)
+		color.Success("Admin console     → http://%s:%d/admin/", cfg.Server.Host, cfg.Server.Port)
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server: %v", err)
 			quit <- syscall.SIGTERM

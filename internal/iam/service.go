@@ -121,6 +121,49 @@ func (s *Service) ValidateToken(token string) (*Claims, error) {
 	return claims, nil
 }
 
+// CountAdmins returns the number of users with the "admin" role.
+func (s *Service) CountAdmins() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&n)
+	return n, err
+}
+
+// ListUsers returns all users ordered by creation time, excluding password hashes.
+func (s *Service) ListUsers() ([]*User, error) {
+	rows, err := s.db.Query(
+		`SELECT id, email, role, tenant_id, created_at FROM users ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []*User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.TenantID, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, &u)
+	}
+	return users, rows.Err()
+}
+
+// DeleteUser removes a user by ID. Returns ErrUserNotFound if no row was deleted.
+func (s *Service) DeleteUser(id string) error {
+	res, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 func hashPassword(password string) string {
 	h := sha256.Sum256([]byte(password))
 	return hex.EncodeToString(h[:])
