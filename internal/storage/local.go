@@ -28,17 +28,22 @@ func NewLocalAdapter(basePath string) *LocalAdapter {
 }
 
 func (a *LocalAdapter) PutObject(_ context.Context, bucket, objectName string, reader io.Reader) error {
-	dir := filepath.Join(a.basePath, bucket)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating bucket dir: %w", err)
+	fullPath := filepath.Join(a.basePath, bucket, objectName)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return fmt.Errorf("creating object dir: %w", err)
 	}
-	f, err := os.Create(filepath.Join(dir, objectName))
+	f, err := os.Create(fullPath)
 	if err != nil {
 		return fmt.Errorf("creating object file: %w", err)
 	}
 	defer f.Close()
 	_, err = io.Copy(f, reader)
 	return err
+}
+
+// GetBasePath returns the root directory used by this adapter.
+func (a *LocalAdapter) GetBasePath() string {
+	return a.basePath
 }
 
 func (a *LocalAdapter) GetObject(_ context.Context, bucket, objectName string) (io.ReadCloser, error) {
