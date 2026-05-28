@@ -127,7 +127,7 @@ func (e *Engine) reload() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	flags := make(map[string]*Flag)
 	for rows.Next() {
@@ -164,7 +164,7 @@ func (e *Engine) loadRules(flagKey string) ([]Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var rules []Rule
 	for rows.Next() {
