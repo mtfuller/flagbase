@@ -8,8 +8,9 @@
 *.so
 *.dylib
 
-# Built binary
+# Built binaries
 starterpack-go-cli
+flagbase
 
 # Test binary, built with `go test -c`
 *.test
