@@ -1,176 +1,242 @@
-# starterpack-go-cli
+# Flagbase
 
-A state-of-the-art Go CLI application template that includes many features out-of-the-box to help developers quickly bootstrap a professional command-line application.
+An open-source, feature-driven Platform as a Service (PaaS) that treats feature flags, A/B testing, and observability as first-class citizens. Flagbase integrates identity-and-access management (IAM) directly with a real-time flag evaluation engine so developers can safely **test in production** by scoping experimental features to specific roles or sessions without affecting end-users.
 
-## Features
+## How It Works
 
-✨ **Out-of-the-box features:**
+Every incoming request flows through three tightly coupled subsystems:
 
-- 🎯 **Argument Parsing**: Built with [Cobra](https://github.com/spf13/cobra) for robust command-line interface
-- 📝 **Structured Logging**: Custom logger with multiple log levels (DEBUG, INFO, WARN, ERROR)
-- 🎨 **Colored Text Output**: ANSI color support for beautiful terminal output
-- ⏳ **Spinner Animations**: Visual feedback for long-running operations
-- 📦 **Version Command**: Built-in version management with build metadata
-- ❓ **Help Command**: Auto-generated help documentation for all commands
-- ✅ **Unit Tests**: Comprehensive unit tests for all packages
-- 🧪 **Integration Tests**: End-to-end integration tests for CLI commands
-- 🔨 **Taskfile**: Easy build, test, and run commands with [Task](https://taskfile.dev)
+```
+[Incoming Request]
+        │
+        ▼
+[Gateway Proxy]  ──→  extract JWT / session context
+        │
+        ▼
+[IAM Evaluator]  ──→  resolve user + role ("developer")
+        │
+        ▼
+[Feature Engine] ──→  match rule → toggle flag for this session only
+        │
+        ▼
+[Backend / Function]
+```
+
+A developer's JWT carries a `role: developer` claim. When the Gateway intercepts their request, the Feature Engine evaluates flags against *that request's context* exclusively — production traffic is never affected.
+
+## Architecture
+
+Flagbase uses a **Hexagonal Architecture (Ports and Adapters)** with a dual-mode deployment model:
+
+| | Local (default) | Cluster |
+|---|---|---|
+| **Storage** | SQLite (WAL mode) | PostgreSQL / DynamoDB |
+| **Compute** | Wazero (WASM) | Firecracker MicroVMs |
+| **Messaging** | Embedded NATS | NATS JetStream / Kafka |
+| **Routing** | Chi reverse proxy | Envoy / Traefik |
+| **Overhead** | Zero — single binary | Helm + cloud infra |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Go 1.21 or higher
+- Go 1.21+
 - [Task](https://taskfile.dev) (optional, for build automation)
 
-### Installation
+### Run
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/mtfuller/starterpack-go-cli.git
-cd starterpack-go-cli
-```
-
-2. Build the application:
-```bash
+# Build
 task build
+
+# Start with defaults (SQLite + embedded NATS on :8080)
+./flagbase start
+
+# Or pass a config file
+./flagbase start --config config.yaml
 ```
 
-3. Run the application:
-```bash
-./starterpack-go-cli --help
+### Configuration
+
+Flagbase runs with sensible defaults and needs no config file for local use. Override with a YAML file:
+
+```yaml
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+database:
+  path: "flagbase.db"
+
+iam:
+  jwt_secret: "change-me-in-production"
+  token_ttl: 24h
+
+storage:
+  base_path: "./data/storage"
+
+events:
+  nats_port: 4222
 ```
 
-## Usage
+## API Reference
 
-### Available Commands
+### Auth
 
-#### Version Command
-Display version information:
 ```bash
-./starterpack-go-cli version
+# Register
+POST /auth/register
+{"email": "dev@example.com", "password": "secret", "role": "developer"}
+
+# Login — returns a Bearer token
+POST /auth/login
+{"email": "dev@example.com", "password": "secret"}
 ```
 
-Short version output:
+### Feature Flags
+
+All flag endpoints require a valid Bearer token.
+
 ```bash
-./starterpack-go-cli version --short
+GET    /api/v1/flags              # list all flags
+POST   /api/v1/flags              # create a flag
+GET    /api/v1/flags/{key}        # get a flag
+PUT    /api/v1/flags/{key}        # update a flag
+DELETE /api/v1/flags/{key}        # delete a flag
+GET    /api/v1/flags/{key}/evaluate  # evaluate flag for the caller's identity
 ```
 
-#### Greet Command
-Simple greeting with colored output:
-```bash
-./starterpack-go-cli greet Alice
+**Create flag example:**
+
+```json
+{
+  "key": "new-checkout-ui",
+  "name": "New Checkout UI",
+  "enabled": true,
+  "default_value": false,
+  "rules": [
+    {
+      "attribute": "role",
+      "operator": "equals",
+      "value": "developer",
+      "variant": true,
+      "priority": 0
+    }
+  ]
+}
 ```
 
-#### Calc Command
-Perform calculations with different operations:
-```bash
-./starterpack-go-cli calc 10 5 --operation add
-./starterpack-go-cli calc 10 5 --operation subtract
-./starterpack-go-cli calc 10 5 --operation multiply
-./starterpack-go-cli calc 10 5 --operation divide
+Rule operators: `equals`, `not_equals`, `contains`, `in` (comma-separated list).
+
+### Gateway
+
+```
+GET|POST /gateway/{path}
 ```
 
-#### Process Command
-Demonstrates spinner animation and logging:
-```bash
-./starterpack-go-cli process
+Routes registered against a flag key are only proxied when the flag evaluates to `true` for the caller's identity. Register routes programmatically via `gateway.ProxyHandler.RegisterRoute`.
+
+### Health
+
+```
+GET /health  →  {"status": "ok"}
 ```
 
-### Global Flags
+## Go SDK
 
-- `-v, --verbose`: Enable verbose output (debug level logging)
-- `-l, --log-level`: Set log level (debug, info, warn, error)
-- `-h, --help`: Display help information
+```go
+import "github.com/mtfuller/flagbase/pkg/sdk"
 
-### Examples with Flags
+client := sdk.NewClient("http://localhost:8080", bearerToken)
 
-Enable verbose logging:
-```bash
-./starterpack-go-cli greet World --verbose
+// Evaluate a flag for the authenticated user
+enabled, err := client.EvaluateFlag("new-checkout-ui")
+
+// Record a metric event (used by the anomaly-detection worker)
+err = client.RecordEvent("new-checkout-ui", "control", "error", 1)
 ```
 
-Set specific log level:
-```bash
-./starterpack-go-cli process --log-level debug
+## Observability & Anomaly Detection
+
+A background worker polls metrics every 30 seconds. Any flag that accumulates more than 10 `error` events within a 5-minute window is **automatically disabled** and a `flagbase.flag.disabled` event is published to the NATS bus. This prevents bad rollouts from reaching production traffic before a human can react.
+
+## Project Structure
+
+```
+.
+├── cmd/                      # Cobra CLI commands
+│   ├── root.go               # Root command + global flags
+│   ├── start.go              # "start" — wires and launches all services
+│   └── version.go            # "version" — prints build metadata
+├── internal/
+│   ├── api/                  # HTTP server, routes, handlers, middleware
+│   ├── color/                # ANSI terminal output helpers
+│   ├── config/               # YAML config loading with defaults
+│   ├── database/             # SQLite connection + schema migrations
+│   ├── event/                # Embedded NATS server + client wrapper
+│   ├── feature/              # In-memory flag evaluation engine (Engine + Flag + Rule)
+│   ├── function/             # Wazero WASM runtime (sandboxed compute)
+│   ├── gateway/              # Context-aware reverse proxy (ProxyHandler)
+│   ├── iam/                  # JWT auth, user registration/login, claims
+│   ├── logger/               # Structured leveled logger
+│   ├── spinner/              # Terminal spinner for long-running ops
+│   ├── storage/              # BucketAdapter interface + local filesystem impl
+│   ├── version/              # Build metadata (version, commit, date)
+│   └── worker/               # Anomaly detection + metric aggregation goroutine
+├── pkg/
+│   ├── example/              # Example business-logic package
+│   └── sdk/                  # Go HTTP client for the flagbase API
+├── tests/
+│   └── integration_test.go   # End-to-end CLI tests
+├── main.go                   # Entry point
+├── Taskfile.yml              # Build / test automation
+└── go.mod
 ```
 
 ## Development
 
-### Running Tests
-
-Run all tests:
 ```bash
-task test
+task build            # compile ./flagbase
+task run              # go run main.go start
+task test             # unit + integration tests
+task test-unit        # internal/ and pkg/ packages only
+task test-integration # tests/ only
+task coverage         # coverage.html report
+task tidy             # go mod tidy
+task clean            # remove binary
 ```
 
-Run only unit tests:
-```bash
-task test-unit
-```
+## Adding a Feature Flag Rule
 
-Run only integration tests:
-```bash
-task test-integration
-```
+Rules are evaluated in `priority` order (lowest first). The first matching rule wins; if no rule matches, `default_value` is returned.
 
-Generate coverage report:
-```bash
-task coverage
-```
+Supported operators:
 
-### Building
+| Operator | Behavior |
+|---|---|
+| `equals` | case-insensitive exact match |
+| `not_equals` | case-insensitive inverse match |
+| `contains` | substring match |
+| `in` | match any value in comma-separated list |
 
-Build the binary:
-```bash
-task build
-```
+## Adding a New Command
 
-Install to GOPATH/bin:
-```bash
-task install
-```
-
-### Project Structure
-
-```
-.
-├── cmd/                    # Command definitions
-│   ├── root.go            # Root command
-│   ├── version.go         # Version command
-│   ├── greet.go           # Example greet command
-│   ├── calc.go            # Example calc command
-│   └── process.go         # Example process command
-├── internal/              # Internal packages
-│   ├── color/             # Colored text utilities
-│   ├── logger/            # Structured logging
-│   ├── spinner/           # Spinner animations
-│   └── version/           # Version management
-├── pkg/                   # Public packages
-│   └── example/           # Example business logic
-├── tests/                 # Integration tests
-├── main.go               # Application entry point
-├── Taskfile.yml          # Build and test automation
-└── README.md             # This file
-```
-
-## Adding New Commands
-
-To add a new command, create a new file in the `cmd/` directory:
+Create `cmd/<name>.go`:
 
 ```go
 package cmd
 
 import (
+    "github.com/mtfuller/flagbase/internal/color"
     "github.com/spf13/cobra"
-    "github.com/mtfuller/starterpack-go-cli/internal/color"
 )
 
 var myCmd = &cobra.Command{
     Use:   "mycommand",
-    Short: "Description of my command",
-    Run: func(cmd *cobra.Command, args []string) {
-        color.Success("My command executed!")
+    Short: "One-line description",
+    RunE: func(cmd *cobra.Command, args []string) error {
+        color.Success("done")
+        return nil
     },
 }
 
@@ -181,4 +247,4 @@ func init() {
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
