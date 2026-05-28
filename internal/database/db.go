@@ -69,4 +69,17 @@ CREATE TABLE IF NOT EXISTS metrics (
 
 CREATE INDEX IF NOT EXISTS idx_metrics_flag_key  ON metrics(flag_key);
 CREATE INDEX IF NOT EXISTS idx_flag_rules_flag   ON flag_rules(flag_key);
+
+CREATE TABLE IF NOT EXISTS functions (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    language    TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    runtime     TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    error       TEXT NOT NULL DEFAULT '',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `

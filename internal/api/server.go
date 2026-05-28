@@ -13,6 +13,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/config"
 	"github.com/mtfuller/flagbase/internal/event"
 	"github.com/mtfuller/flagbase/internal/feature"
+	"github.com/mtfuller/flagbase/internal/function"
 	"github.com/mtfuller/flagbase/internal/gateway"
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/storage"
@@ -37,10 +38,12 @@ func NewServer(
 	bus *event.Bus,
 	metrics MetricRecorder,
 	setupMgr *admin.SetupManager,
+	fnStore *function.Store,
 ) *Server {
 	gw := gateway.NewProxyHandler(featureEng)
 	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
 	ah := &AdminHandlers{IAM: iamSvc, Setup: setupMgr, Store: store, DB: db}
+	fh := &FunctionHandlers{Functions: fnStore}
 
 	adminHTML, _ := web.FS.ReadFile("index.html")
 	serveAdmin := func(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +92,11 @@ func NewServer(
 		r.Get("/storage/buckets", ah.AdminListBuckets)
 		r.Post("/storage/buckets", ah.AdminCreateBucket)
 		r.Delete("/storage/buckets/{bucket}", ah.AdminDeleteBucket)
+		r.Get("/functions", fh.ListFunctions)
+		r.Post("/functions", fh.CreateFunction)
+		r.Get("/functions/{id}", fh.GetFunction)
+		r.Delete("/functions/{id}", fh.DeleteFunction)
+		r.Post("/functions/{id}/invoke", fh.InvokeFunction)
 	})
 
 	// Admin console SPA (served for all /admin/* paths not matched above)

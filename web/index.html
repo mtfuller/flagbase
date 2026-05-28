@@ -154,6 +154,10 @@ td.text-primary{color:var(--text)}
 .badge-purple{background:rgba(99,102,241,.1);color:var(--primary)}
 .badge::before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor}
 
+/* ── Code editor textarea ───────────────────────────────────── */
+.fn-editor{font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.7;min-height:260px;resize:vertical;color:#a5b4fc;tab-size:2}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 /* ── Empty state ────────────────────────────────────────────── */
 .empty-state{text-align:center;padding:48px 24px;color:var(--text-3)}
 .empty-icon{font-size:40px;margin-bottom:12px;opacity:.5}
@@ -1054,43 +1058,227 @@ async function confirmDeleteUser(id) {
 }
 
 // ═══════════════════════ FUNCTIONS ════════════════════════════
-function loadFunctions() {
-  setActions('');
-  document.getElementById('content').innerHTML = `
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">WASM Functions</span>
-        <span class="badge badge-yellow">Preview</span>
-      </div>
-      <div class="card-body">
-        <p style="color:var(--text-2);margin-bottom:20px;line-height:1.7">
-          Flagbase supports sandboxed WebAssembly functions via the <strong style="color:var(--text)">Wazero</strong> runtime.
-          Each invocation runs in an isolated context with a hard timeout, making them safe for untrusted code.
-        </p>
-        <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px">
-          <div style="font-size:12px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">How It Works</div>
-          <div style="display:grid;gap:12px">
-            ${[
-              ['1. Compile', 'Compile your Go/Rust/AssemblyScript to WASM with an exported <code style="background:rgba(255,255,255,.08);padding:1px 5px;border-radius:3px">handle()</code> function.'],
-              ['2. Store', 'Upload the .wasm file to a storage bucket using the API.'],
-              ['3. Invoke', 'Call <code style="background:rgba(255,255,255,.08);padding:1px 5px;border-radius:3px">POST /api/v1/functions/invoke</code> with the bucket path and timeout.'],
-            ].map(([t,d]) => `<div style="display:flex;gap:12px;align-items:flex-start">
-              <span class="badge badge-purple" style="flex-shrink:0;margin-top:2px">${t}</span>
-              <span style="color:var(--text-2);font-size:13px">${d}</span>
-            </div>`).join('')}
-          </div>
+const fnTemplates = {
+  go: `package main
+
+import "fmt"
+
+func main() {
+\tfmt.Println("Hello from Go WASM!")
+}`,
+  javascript: `// Call handle() to produce output via console.log
+function handle() {
+  console.log("Hello from JavaScript!");
+}`
+};
+
+async function loadFunctions() {
+  setActions(`<button class="btn btn-primary btn-sm" onclick="openFnModal()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Function
+  </button>`);
+  try {
+    const fns = await GET('/admin/api/functions');
+    if (!fns || fns.length === 0) {
+      document.getElementById('content').innerHTML = `<div class="empty-state">
+        <div class="empty-icon">⚡</div>
+        <div class="empty-title">No functions yet</div>
+        <div class="empty-text">Write Go or JavaScript code in the browser and deploy it to the sandboxed Wazero runtime.</div>
+      </div>`;
+      return;
+    }
+    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Language</th><th>Runtime</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody>${fns.map(fn => `<tr>
+          <td>
+            <span class="text-primary">${esc(fn.name)}</span>
+            ${fn.description ? `<div style="font-size:11px;color:var(--text-3);margin-top:2px">${esc(fn.description)}</div>` : ''}
+          </td>
+          <td>${fnLangBadge(fn.language)}</td>
+          <td><span style="font-size:12px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${esc(fn.runtime||'—')}</span></td>
+          <td>${fnStatusBadge(fn.status, fn.error)}</td>
+          <td style="color:var(--text-2)">${fmtDate(fn.created_at)}</td>
+          <td style="display:flex;gap:6px">
+            ${fn.status === 'ready' ? `<button class="btn btn-ghost btn-sm btn-icon" onclick="invokeFn('${esc(fn.id)}','${esc(fn.name)}')" title="Invoke">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>` : ''}
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="viewFnSource('${esc(fn.id)}','${esc(fn.name)}')" title="View source">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            </button>
+            <button class="btn btn-danger btn-sm btn-icon" onclick="deleteFn('${esc(fn.id)}','${esc(fn.name)}')" title="Delete">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            </button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div></div>`;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+function fnLangBadge(lang) {
+  if (lang === 'go') return `<span class="badge badge-blue">Go</span>`;
+  if (lang === 'javascript') return `<span class="badge badge-yellow">JavaScript</span>`;
+  return `<span class="badge">${esc(lang)}</span>`;
+}
+
+function fnStatusBadge(status, errMsg) {
+  if (status === 'ready') return `<span class="badge badge-green">ready</span>`;
+  if (status === 'compiling') return `<span class="badge badge-yellow">compiling…</span>`;
+  if (status === 'error') return `<span class="badge badge-red" title="${esc(errMsg||'')}">error</span>`;
+  return `<span class="badge">${esc(status)}</span>`;
+}
+
+function openFnModal(lang) {
+  lang = lang || 'go';
+  openModal('New Function', `
+    <div class="modal-body">
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Name</label>
+          <input class="form-input" id="fn-name" placeholder="my-function" required>
         </div>
-        <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
-          <div style="font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.5px;margin-bottom:8px;text-transform:uppercase">Example (Go)</div>
-          <pre style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;line-height:1.6;overflow-x:auto">//go:export handle
-func handle() (uint32, uint32) {
-    msg := []byte("hello from wasm")
-    ptr := &amp;msg[0]
-    return uint32(uintptr(unsafe.Pointer(ptr))), uint32(len(msg))
-}</pre>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Language</label>
+          <select class="form-input form-select" id="fn-lang" onchange="onFnLangChange(this.value)">
+            <option value="go" ${lang==='go'?'selected':''}>Go (compiles to WASM)</option>
+            <option value="javascript" ${lang==='javascript'?'selected':''}>JavaScript (goja interpreter)</option>
+          </select>
         </div>
       </div>
-    </div>`;
+      <div class="form-group" style="margin-bottom:12px">
+        <label class="form-label">Description <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+        <input class="form-input" id="fn-desc" placeholder="What does this function do?">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Source Code</label>
+        <textarea class="form-input fn-editor" id="fn-src" spellcheck="false" autocomplete="off" autocorrect="off">${esc(fnTemplates[lang])}</textarea>
+        <div class="form-hint" id="fn-lang-hint">${fnLangHint(lang)}</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createFn()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        Compile &amp; Deploy
+      </button>
+    </div>`, true);
+}
+
+function fnLangHint(lang) {
+  if (lang === 'go') return 'Write a complete Go program. Output to <code style="background:rgba(255,255,255,.08);padding:1px 4px;border-radius:3px">stdout</code> (fmt.Println) is captured on invocation.';
+  return 'Export a <code style="background:rgba(255,255,255,.08);padding:1px 4px;border-radius:3px">handle()</code> function. Use <code style="background:rgba(255,255,255,.08);padding:1px 4px;border-radius:3px">console.log()</code> to produce output.';
+}
+
+function onFnLangChange(lang) {
+  const cur = document.getElementById('fn-src').value;
+  const isDefault = Object.values(fnTemplates).some(t => t === cur.trim() || cur.trim() === '');
+  if (isDefault) document.getElementById('fn-src').value = fnTemplates[lang];
+  document.getElementById('fn-lang-hint').innerHTML = fnLangHint(lang);
+}
+
+async function createFn() {
+  const name = document.getElementById('fn-name').value.trim();
+  const lang = document.getElementById('fn-lang').value;
+  const desc = document.getElementById('fn-desc').value.trim();
+  const src  = document.getElementById('fn-src').value;
+  if (!name || !src) { toast('Name and source are required', 'error'); return; }
+
+  const btn = document.querySelector('#modal-box .btn-primary');
+  const origHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin .8s linear infinite"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg> Compiling…`;
+
+  try {
+    const fn = await POST('/admin/api/functions', {name, description: desc, language: lang, source: src});
+    closeModal();
+    if (fn.status === 'ready') {
+      toast(`"${fn.name}" compiled and deployed`);
+    } else {
+      toast(`Compilation failed: ${fn.error}`, 'error');
+    }
+    loadFunctions();
+  } catch(err) {
+    toast(err.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = origHTML;
+  }
+}
+
+async function invokeFn(id, name) {
+  openModal(`Invoke: ${esc(name)}`, `
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Timeout (seconds)</label>
+        <input class="form-input" id="fn-timeout" type="number" value="5" min="1" max="30" style="width:100px">
+      </div>
+      <div id="fn-output-wrap" style="display:none">
+        <label class="form-label" style="margin-bottom:6px">Output</label>
+        <pre id="fn-output" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;min-height:60px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary" id="fn-run-btn" onclick="runFn('${esc(id)}')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Run
+      </button>
+    </div>`);
+}
+
+async function runFn(id) {
+  const timeout = parseInt(document.getElementById('fn-timeout').value, 10) || 5;
+  const btn = document.getElementById('fn-run-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin .8s linear infinite"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg> Running…`;
+  try {
+    const res = await POST(`/admin/api/functions/${id}/invoke`, {timeout_seconds: timeout});
+    document.getElementById('fn-output-wrap').style.display = 'block';
+    document.getElementById('fn-output').textContent = res.output || '(no output)';
+  } catch(err) {
+    document.getElementById('fn-output-wrap').style.display = 'block';
+    document.getElementById('fn-output').style.color = 'var(--danger)';
+    document.getElementById('fn-output').textContent = err.message;
+  }
+  btn.disabled = false;
+  btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run`;
+}
+
+async function viewFnSource(id, name) {
+  try {
+    const fn = await GET(`/admin/api/functions/${id}`);
+    openModal(`Source: ${esc(name)}`, `
+      <div class="modal-body">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          ${fnLangBadge(fn.language)} ${fnStatusBadge(fn.status, fn.error)}
+          ${fn.error ? `<span style="color:var(--danger);font-size:12px;align-self:center">${esc(fn.error)}</span>` : ''}
+        </div>
+        <pre style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;max-height:420px;overflow:auto;white-space:pre;line-height:1.6">${esc(fn.source)}</pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      </div>`, true);
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+function deleteFn(id, name) {
+  openModal('Delete Function', `
+    <div class="modal-body">
+      <p style="color:var(--text-2)">Delete function <strong style="color:var(--text)">${esc(name)}</strong>? The compiled artifact will also be removed.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDeleteFn('${esc(id)}')">Delete</button>
+    </div>`);
+}
+
+async function confirmDeleteFn(id) {
+  try {
+    await DEL('/admin/api/functions/' + id);
+    closeModal(); toast('Function deleted'); loadFunctions();
+  } catch(err) { toast(err.message, 'error'); }
 }
 
 // ═══════════════════════ UTILS ════════════════════════════════
