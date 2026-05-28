@@ -82,4 +82,25 @@ CREATE TABLE IF NOT EXISTS functions (
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS frontends (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL,
+    slug              TEXT UNIQUE NOT NULL,
+    description       TEXT NOT NULL DEFAULT '',
+    active_version_id TEXT,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS frontend_versions (
+    id          TEXT PRIMARY KEY,
+    frontend_id TEXT NOT NULL REFERENCES frontends(id) ON DELETE CASCADE,
+    label       TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    file_count  INTEGER NOT NULL DEFAULT 0,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_frontend_versions_frontend ON frontend_versions(frontend_id);
 `

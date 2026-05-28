@@ -13,6 +13,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/config"
 	"github.com/mtfuller/flagbase/internal/event"
 	"github.com/mtfuller/flagbase/internal/feature"
+	"github.com/mtfuller/flagbase/internal/frontend"
 	"github.com/mtfuller/flagbase/internal/function"
 	"github.com/mtfuller/flagbase/internal/gateway"
 	"github.com/mtfuller/flagbase/internal/iam"
@@ -39,11 +40,13 @@ func NewServer(
 	metrics MetricRecorder,
 	setupMgr *admin.SetupManager,
 	fnStore *function.Store,
+	frontendSvc *frontend.Service,
 ) *Server {
 	gw := gateway.NewProxyHandler(featureEng)
 	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
 	ah := &AdminHandlers{IAM: iamSvc, Setup: setupMgr, Store: store, DB: db}
 	fh := &FunctionHandlers{Functions: fnStore}
+	ffh := &FrontendHandlers{Frontends: frontendSvc}
 
 	adminHTML, _ := web.FS.ReadFile("index.html")
 	serveAdmin := func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +112,25 @@ func NewServer(
 	})
 	r.Get("/admin/", serveAdmin)
 	r.Get("/admin/*", serveAdmin)
+
+	// Frontends — management API (authenticated) + public file serving
+	r.Route("/api/v1/frontends", func(r chi.Router) {
+		r.Use(RequireRole("user"))
+		r.Get("/", ffh.ListFrontends)
+		r.Post("/", ffh.CreateFrontend)
+		r.Get("/{id}", ffh.GetFrontend)
+		r.Put("/{id}", ffh.UpdateFrontend)
+		r.Delete("/{id}", ffh.DeleteFrontend)
+		r.Get("/{id}/versions", ffh.ListVersions)
+		r.Post("/{id}/versions", ffh.CreateVersion)
+		r.Get("/{id}/versions/{versionId}", ffh.GetVersion)
+		r.Delete("/{id}/versions/{versionId}", ffh.DeleteVersion)
+		r.Put("/{id}/versions/{versionId}/activate", ffh.ActivateVersion)
+	})
+	r.Get("/frontends/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
+	})
+	r.Get("/frontends/{slug}/*", ffh.ServeFrontend)
 
 	// Gateway — dynamic reverse proxy
 	r.Handle("/gateway/*", gw)

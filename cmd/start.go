@@ -15,6 +15,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/database"
 	"github.com/mtfuller/flagbase/internal/event"
 	"github.com/mtfuller/flagbase/internal/feature"
+	"github.com/mtfuller/flagbase/internal/frontend"
 	"github.com/mtfuller/flagbase/internal/function"
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/logger"
@@ -80,6 +81,8 @@ func runStart(_ *cobra.Command, _ []string) error {
 	defer fnEngine.Close(context.Background())
 	fnStore := function.NewStore(db, store, fnEngine)
 
+	frontendSvc := frontend.NewService(db, store)
+
 	setupMgr := admin.NewSetupManager()
 
 	adminCount, err := iamSvc.CountAdmins()
@@ -101,7 +104,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		fmt.Println()
 	}
 
-	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr, fnStore)
+	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr, fnStore, frontendSvc)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
