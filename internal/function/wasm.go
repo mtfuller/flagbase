@@ -1,24 +1,35 @@
 package function
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/sys"
 )
 
 // Engine wraps a Wazero runtime for executing sandboxed WASM functions.
 // Each Invoke call instantiates a fresh module with a hard execution deadline,
 // preventing runaway functions from starving shared CPU resources (single-node caveat).
 type Engine struct {
-	runtime wazero.Runtime
+	runtime  wazero.Runtime
+	wasiOnce sync.Once
+	wasiErr  error
 }
 
 // NewEngine creates an Engine. The caller must call Close when done.
+// WithCloseOnContextDone enables hard interruption of tight WASM loops
+// when the execution context deadline is exceeded.
 func NewEngine(ctx context.Context) *Engine {
-	return &Engine{runtime: wazero.NewRuntime(ctx)}
+	cfg := wazero.NewRuntimeConfig().WithCloseOnContextDone(true)
+	return &Engine{runtime: wazero.NewRuntimeWithConfig(ctx, cfg)}
 }
 
 // Close releases all resources held by the runtime.
@@ -75,4 +86,48 @@ func (e *Engine) Invoke(ctx context.Context, wasmPath string, timeout time.Durat
 	out := make([]byte, size)
 	copy(out, buf)
 	return out, nil
+}
+
+// InvokeWASI loads and runs a WASI preview1 WASM module (e.g. compiled with
+// GOOS=wasip1 GOARCH=wasm). The module's main() is called automatically on
+// instantiation; stdout is captured and returned. Exit code 0 is success.
+func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.Duration) ([]byte, error) {
+	// Instantiate the WASI host module once per runtime lifetime.
+	e.wasiOnce.Do(func() {
+		_, e.wasiErr = wasi_snapshot_preview1.NewBuilder(e.runtime).Instantiate(ctx)
+	})
+	if e.wasiErr != nil {
+		return nil, fmt.Errorf("initialising wasi: %w", e.wasiErr)
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	compiled, err := e.runtime.CompileModule(execCtx, wasmBytes)
+	if err != nil {
+		return nil, fmt.Errorf("compiling wasm module: %w", err)
+	}
+	defer compiled.Close(ctx)
+
+	var stdout bytes.Buffer
+	cfg := wazero.NewModuleConfig().
+		WithStdout(&stdout).
+		WithStderr(io.Discard).
+		WithSysNanosleep().
+		WithSysNanotime().
+		WithSysWalltime()
+
+	_, err = e.runtime.InstantiateModule(execCtx, compiled, cfg)
+	// WASI programs signal clean exit via proc_exit(0), which wazero surfaces
+	// as a *sys.ExitError with ExitCode() == 0. Treat that as success.
+	if err != nil {
+		var exitErr *sys.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 0 {
+			err = nil
+		} else {
+			return nil, fmt.Errorf("wasm execution: %w", err)
+		}
+	}
+
+	return stdout.Bytes(), nil
 }

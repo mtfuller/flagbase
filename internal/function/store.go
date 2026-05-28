@@ -1,0 +1,266 @@
+package function
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/dop251/goja"
+	"github.com/mtfuller/flagbase/internal/compiler"
+	"github.com/mtfuller/flagbase/internal/storage"
+)
+
+const functionsBucket = "functions"
+
+// Function is a stored, potentially compiled, user function.
+type Function struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Language    string    `json:"language"`
+	Source      string    `json:"source"`
+	Runtime     string    `json:"runtime"`
+	Status      string    `json:"status"`
+	Error       string    `json:"error,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Store manages function lifecycle: persistence, compilation, and invocation.
+type Store struct {
+	db     *sql.DB
+	store  *storage.LocalAdapter
+	engine *Engine
+}
+
+func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine) *Store {
+	return &Store{db: db, store: store, engine: engine}
+}
+
+// Create persists a new function record and compiles it synchronously.
+func (s *Store) Create(ctx context.Context, name, description, language, source string) (*Function, error) {
+	id, err := newID()
+	if err != nil {
+		return nil, fmt.Errorf("generating id: %w", err)
+	}
+
+	c, err := compilerFor(language)
+	if err != nil {
+		return nil, err
+	}
+
+	fn := &Function{
+		ID:          id,
+		Name:        name,
+		Description: description,
+		Language:    language,
+		Source:      source,
+		Status:      "compiling",
+	}
+
+	if err := s.insert(ctx, fn); err != nil {
+		return nil, fmt.Errorf("inserting function: %w", err)
+	}
+
+	result, compileErr := c.Compile(source)
+	if compileErr != nil {
+		fn.Status = "error"
+		fn.Error = compileErr.Error()
+		_ = s.updateStatus(ctx, id, "error", compileErr.Error(), "")
+		return fn, nil
+	}
+
+	fn.Runtime = string(result.Runtime)
+	objectName := id + artifactExt(result.Runtime)
+	if err := s.store.PutObject(ctx, functionsBucket, objectName, bytes.NewReader(result.Artifact)); err != nil {
+		fn.Status = "error"
+		fn.Error = fmt.Sprintf("storing artifact: %v", err)
+		_ = s.updateStatus(ctx, id, "error", fn.Error, "")
+		return fn, nil
+	}
+
+	fn.Status = "ready"
+	_ = s.updateStatus(ctx, id, "ready", "", string(result.Runtime))
+	return fn, nil
+}
+
+// List returns all functions ordered by creation date descending.
+func (s *Store) List(ctx context.Context) ([]Function, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, description, language, source, runtime, status, error, created_at, updated_at
+		FROM functions ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var fns []Function
+	for rows.Next() {
+		var f Function
+		if err := rows.Scan(&f.ID, &f.Name, &f.Description, &f.Language, &f.Source,
+			&f.Runtime, &f.Status, &f.Error, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		fns = append(fns, f)
+	}
+	if fns == nil {
+		fns = []Function{}
+	}
+	return fns, nil
+}
+
+// Get returns a single function by ID.
+func (s *Store) Get(ctx context.Context, id string) (*Function, error) {
+	var f Function
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, description, language, source, runtime, status, error, created_at, updated_at
+		FROM functions WHERE id = ?`, id).
+		Scan(&f.ID, &f.Name, &f.Description, &f.Language, &f.Source,
+			&f.Runtime, &f.Status, &f.Error, &f.CreatedAt, &f.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &f, err
+}
+
+// Delete removes a function and its stored artifact.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	fn, err := s.Get(ctx, id)
+	if err != nil || fn == nil {
+		return err
+	}
+	ext := artifactExt(compiler.Runtime(fn.Runtime))
+	_ = s.store.DeleteObject(ctx, functionsBucket, id+ext)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM functions WHERE id = ?`, id)
+	return err
+}
+
+// Invoke executes a ready function and returns its output.
+func (s *Store) Invoke(ctx context.Context, id string, timeout time.Duration) ([]byte, error) {
+	fn, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("loading function: %w", err)
+	}
+	if fn == nil {
+		return nil, fmt.Errorf("function not found")
+	}
+	if fn.Status != "ready" {
+		return nil, fmt.Errorf("function is not ready (status: %s)", fn.Status)
+	}
+
+	switch compiler.Runtime(fn.Runtime) {
+	case compiler.RuntimeWASM:
+		return s.invokeWASM(ctx, fn, timeout)
+	case compiler.RuntimeJS:
+		return s.invokeJS(fn, timeout)
+	default:
+		return nil, fmt.Errorf("unknown runtime: %s", fn.Runtime)
+	}
+}
+
+func (s *Store) invokeWASM(ctx context.Context, fn *Function, timeout time.Duration) ([]byte, error) {
+	rc, err := s.store.GetObject(ctx, functionsBucket, fn.ID+".wasm")
+	if err != nil {
+		return nil, fmt.Errorf("loading wasm artifact: %w", err)
+	}
+	defer rc.Close()
+	wasmBytes, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("reading wasm bytes: %w", err)
+	}
+	return s.engine.InvokeWASI(ctx, wasmBytes, timeout)
+}
+
+func (s *Store) invokeJS(fn *Function, timeout time.Duration) ([]byte, error) {
+	vm := goja.New()
+
+	var out strings.Builder
+	_ = vm.Set("console", map[string]interface{}{
+		"log": func(args ...interface{}) {
+			for i, a := range args {
+				if i > 0 {
+					out.WriteByte(' ')
+				}
+				fmt.Fprintf(&out, "%v", a)
+			}
+			out.WriteByte('\n')
+		},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := vm.RunString(fn.Source)
+		if err != nil {
+			done <- err
+			return
+		}
+		handleFn, ok := goja.AssertFunction(vm.Get("handle"))
+		if !ok {
+			done <- fmt.Errorf("javascript function must export a 'handle' function")
+			return
+		}
+		_, err = handleFn(goja.Undefined())
+		done <- err
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, fmt.Errorf("js execution: %w", err)
+		}
+	case <-timer.C:
+		vm.Interrupt("execution timeout")
+		return nil, fmt.Errorf("js execution timed out after %s", timeout)
+	}
+
+	return []byte(out.String()), nil
+}
+
+func (s *Store) insert(ctx context.Context, fn *Function) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO functions (id, name, description, language, source, runtime, status, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		fn.ID, fn.Name, fn.Description, fn.Language, fn.Source, fn.Runtime, fn.Status, fn.Error)
+	return err
+}
+
+func (s *Store) updateStatus(ctx context.Context, id, status, errMsg, runtime string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE functions SET status = ?, error = ?, runtime = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`,
+		status, errMsg, runtime, id)
+	return err
+}
+
+func compilerFor(language string) (compiler.Compiler, error) {
+	switch compiler.Language(language) {
+	case compiler.LanguageGo:
+		return compiler.NewGoCompiler(), nil
+	case compiler.LanguageJavaScript:
+		return compiler.NewJSCompiler(), nil
+	default:
+		return nil, fmt.Errorf("unsupported language: %s (supported: go, javascript)", language)
+	}
+}
+
+func artifactExt(rt compiler.Runtime) string {
+	if rt == compiler.RuntimeWASM {
+		return ".wasm"
+	}
+	return ".js"
+}
+
+func newID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("rand.Read: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/database"
 	"github.com/mtfuller/flagbase/internal/event"
 	"github.com/mtfuller/flagbase/internal/feature"
+	"github.com/mtfuller/flagbase/internal/function"
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/logger"
 	"github.com/mtfuller/flagbase/internal/storage"
@@ -74,6 +76,10 @@ func runStart(_ *cobra.Command, _ []string) error {
 	bgWorker.Start()
 	defer bgWorker.Stop()
 
+	fnEngine := function.NewEngine(context.Background())
+	defer fnEngine.Close(context.Background())
+	fnStore := function.NewStore(db, store, fnEngine)
+
 	setupMgr := admin.NewSetupManager()
 
 	adminCount, err := iamSvc.CountAdmins()
@@ -95,7 +101,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		fmt.Println()
 	}
 
-	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr)
+	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr, fnStore)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
