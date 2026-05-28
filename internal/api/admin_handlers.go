@@ -4,7 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mtfuller/flagbase/internal/admin"
@@ -150,6 +153,77 @@ func (h *AdminHandlers) AdminCreateBucket(w http.ResponseWriter, r *http.Request
 func (h *AdminHandlers) AdminDeleteBucket(w http.ResponseWriter, r *http.Request) {
 	bucket := chi.URLParam(r, "bucket")
 	if err := h.Store.DeleteBucket(r.Context(), bucket); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminListObjects returns all object names in a bucket.
+func (h *AdminHandlers) AdminListObjects(w http.ResponseWriter, r *http.Request) {
+	bucket := chi.URLParam(r, "bucket")
+	objects, err := h.Store.ListObjects(r.Context(), bucket)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, objects)
+}
+
+// AdminUploadObject accepts a multipart/form-data upload and stores it in the bucket.
+// The form field must be named "file"; the object is stored under the original filename.
+func (h *AdminHandlers) AdminUploadObject(w http.ResponseWriter, r *http.Request) {
+	bucket := chi.URLParam(r, "bucket")
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "parsing multipart form: "+err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file field is required")
+		return
+	}
+	defer file.Close()
+
+	objectName := filepath.Base(header.Filename)
+	if objectName == "" || objectName == "." {
+		writeError(w, http.StatusBadRequest, "invalid filename")
+		return
+	}
+
+	if err := h.Store.PutObject(r.Context(), bucket, objectName, file); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"name": objectName, "bucket": bucket})
+}
+
+// AdminGetObject streams an object from a bucket to the client as a download.
+func (h *AdminHandlers) AdminGetObject(w http.ResponseWriter, r *http.Request) {
+	bucket := chi.URLParam(r, "bucket")
+	object := chi.URLParam(r, "object")
+
+	rc, err := h.Store.GetObject(r.Context(), bucket, object)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "object not found")
+		return
+	}
+	defer rc.Close()
+
+	ct := mime.TypeByExtension(filepath.Ext(object))
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+object+`"`)
+	_, _ = io.Copy(w, rc)
+}
+
+// AdminDeleteObject removes a single object from a bucket.
+func (h *AdminHandlers) AdminDeleteObject(w http.ResponseWriter, r *http.Request) {
+	bucket := chi.URLParam(r, "bucket")
+	object := chi.URLParam(r, "object")
+	if err := h.Store.DeleteObject(r.Context(), bucket, object); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
