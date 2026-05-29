@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS functions (
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS function_versions (
+    id          TEXT PRIMARY KEY,
+    function_id TEXT NOT NULL REFERENCES functions(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_function_versions_fn ON function_versions(function_id);
+
 CREATE TABLE IF NOT EXISTS frontends (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL,

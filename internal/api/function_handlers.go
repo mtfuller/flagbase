@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,6 +139,109 @@ func (h *FunctionHandlers) InvokeFunction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": string(output)})
+}
+
+// InvokeFunctionStream streams the function's stdout in real-time using
+// Server-Sent Events. The client reads data events with JSON payloads:
+//
+//	{"type":"stdout","data":"..."}   — a chunk of stdout output
+//	{"type":"done"}                  — execution completed successfully
+//	{"type":"error","message":"..."}  — execution failed
+func (h *FunctionHandlers) InvokeFunctionStream(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	timeoutSecs := 5
+	if v := r.URL.Query().Get("timeout"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 30 {
+			timeoutSecs = n
+		}
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	// Extend write deadline to accommodate the full function timeout plus buffer.
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(time.Duration(timeoutSecs+10) * time.Second))
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	sw := &sseWriter{w: w, flusher: flusher}
+	timeout := time.Duration(timeoutSecs) * time.Second
+	err := h.Functions.InvokeStream(r.Context(), id, timeout, sw)
+
+	var finalEvent []byte
+	if err != nil {
+		finalEvent, _ = json.Marshal(map[string]string{"type": "error", "message": err.Error()})
+	} else {
+		finalEvent, _ = json.Marshal(map[string]string{"type": "done"})
+	}
+	fmt.Fprintf(w, "data: %s\n\n", finalEvent)
+	flusher.Flush()
+}
+
+// sseWriter wraps an http.ResponseWriter to emit SSE events for each Write call.
+type sseWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (s *sseWriter) Write(p []byte) (int, error) {
+	b, _ := json.Marshal(map[string]string{"type": "stdout", "data": string(p)})
+	_, err := fmt.Fprintf(s.w, "data: %s\n\n", b)
+	s.flusher.Flush()
+	return len(p), err
+}
+
+// ListFunctionVersions returns the deployment version history for a function.
+func (h *FunctionHandlers) ListFunctionVersions(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	versions, err := h.Functions.ListVersions(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, versions)
+}
+
+// DeployFunctionVersion accepts a new WASM artifact for an existing function,
+// overwrites the active artifact, and records it as a new version.
+func (h *FunctionHandlers) DeployFunctionVersion(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	const maxUploadSize = 32 << 20
+	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
+		return
+	}
+
+	file, _, err := r.FormFile("artifact")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "artifact file is required (field name: artifact)")
+		return
+	}
+	defer file.Close()
+
+	wasmBytes, err := io.ReadAll(file)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "reading artifact")
+		return
+	}
+
+	version, err := h.Functions.DeployVersion(r.Context(), id, wasmBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, version)
 }
 
 // GetFunctionScaffold returns a zip archive containing a starter Go project wired

@@ -96,12 +96,27 @@ func (e *Engine) Invoke(ctx context.Context, wasmPath string, timeout time.Durat
 // If deps is non-nil, the "flagbase" host module is registered once and host
 // functions (storage, flag evaluation, etc.) become available to WASM code.
 func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps) ([]byte, error) {
+	var stdout bytes.Buffer
+	if err := e.invokeWASIWith(ctx, wasmBytes, timeout, deps, &stdout); err != nil {
+		return nil, err
+	}
+	return stdout.Bytes(), nil
+}
+
+// InvokeWASIStream runs a WASI WASM module and writes stdout directly to w as
+// bytes arrive, enabling real-time streaming to callers.
+func (e *Engine) InvokeWASIStream(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps, w io.Writer) error {
+	return e.invokeWASIWith(ctx, wasmBytes, timeout, deps, w)
+}
+
+// invokeWASIWith is the shared implementation backing both InvokeWASI and InvokeWASIStream.
+func (e *Engine) invokeWASIWith(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps, stdout io.Writer) error {
 	// Instantiate the WASI host module once per runtime lifetime.
 	e.wasiOnce.Do(func() {
 		_, e.wasiErr = wasi_snapshot_preview1.NewBuilder(e.runtime).Instantiate(ctx)
 	})
 	if e.wasiErr != nil {
-		return nil, fmt.Errorf("initialising wasi: %w", e.wasiErr)
+		return fmt.Errorf("initialising wasi: %w", e.wasiErr)
 	}
 
 	if deps != nil {
@@ -109,7 +124,7 @@ func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.
 			e.hostErr = registerHostModule(ctx, e.runtime, *deps)
 		})
 		if e.hostErr != nil {
-			return nil, fmt.Errorf("initialising host module: %w", e.hostErr)
+			return fmt.Errorf("initialising host module: %w", e.hostErr)
 		}
 	}
 
@@ -121,13 +136,12 @@ func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.
 
 	compiled, err := e.runtime.CompileModule(execCtx, wasmBytes)
 	if err != nil {
-		return nil, fmt.Errorf("compiling wasm module: %w", err)
+		return fmt.Errorf("compiling wasm module: %w", err)
 	}
 	defer compiled.Close(ctx)
 
-	var stdout bytes.Buffer
 	cfg := wazero.NewModuleConfig().
-		WithStdout(&stdout).
+		WithStdout(stdout).
 		WithStderr(io.Discard).
 		WithSysNanosleep().
 		WithSysNanotime().
@@ -139,11 +153,9 @@ func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.
 	if err != nil {
 		var exitErr *sys.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 0 {
-			err = nil
-		} else {
-			return nil, fmt.Errorf("wasm execution: %w", err)
+			return nil
 		}
+		return fmt.Errorf("wasm execution: %w", err)
 	}
-
-	return stdout.Bytes(), nil
+	return nil
 }
