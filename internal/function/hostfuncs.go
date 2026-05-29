@@ -111,6 +111,24 @@ func registerHostModule(ctx context.Context, rt wazero.Runtime, deps HostDeps) e
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
 		Export("error_read")
 
+	// event_read(outPtr, outLen uint32) uint32
+	// Copies the triggering event JSON payload (set by InvokeWithEvent) into WASM memory.
+	// Returns the number of bytes written; returns 0 when no event is attached.
+	b.NewFunctionBuilder().
+		WithParameterNames("outPtr", "outLen").
+		WithResultNames("written").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
+			outPtr := uint32(stack[0])
+			outLen := uint32(stack[1])
+			var payload []byte
+			if v := ctx.Value(eventPayloadKey{}); v != nil {
+				payload = v.([]byte)
+			}
+			n := copy32(m, outPtr, outLen, payload)
+			stack[0] = uint64(n)
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("event_read")
+
 	// bucket_get(bucketPtr, bucketLen, keyPtr, keyLen uint32) uint32
 	b.NewFunctionBuilder().
 		WithParameterNames("bucketPtr", "bucketLen", "keyPtr", "keyLen").

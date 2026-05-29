@@ -2,6 +2,7 @@ package table
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -48,7 +49,13 @@ func (e *Engine) InsertRecord(tableKey string, data map[string]interface{}) (*Re
 		return nil, fmt.Errorf("inserting record: %w", err)
 	}
 
-	return e.GetRecord(tableKey, id)
+	rec, err := e.GetRecord(tableKey, id)
+	if err == nil && rec != nil && e.bus != nil {
+		if data, jerr := json.Marshal(rec); jerr == nil {
+			_ = e.bus.Publish("flagbase.table."+tableKey+".created", data)
+		}
+	}
+	return rec, err
 }
 
 // GetRecord fetches a single row by _id, returning nil if not found.

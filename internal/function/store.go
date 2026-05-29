@@ -20,6 +20,15 @@ import (
 
 const functionsBucket = "functions"
 
+// eventPayloadKey is the context key for the event payload injected by InvokeWithEvent.
+type eventPayloadKey struct{}
+
+// InvokeWithEvent executes a function with an event payload readable via the event_read host call.
+func (s *Store) InvokeWithEvent(ctx context.Context, id string, timeout time.Duration, eventData []byte) ([]byte, error) {
+	ctx = context.WithValue(ctx, eventPayloadKey{}, eventData)
+	return s.Invoke(ctx, id, timeout)
+}
+
 // Function is a stored, potentially compiled, user function.
 type Function struct {
 	ID          string    `json:"id"`

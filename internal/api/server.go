@@ -19,6 +19,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/storage"
 	"github.com/mtfuller/flagbase/internal/table"
+	"github.com/mtfuller/flagbase/internal/trigger"
 	"github.com/mtfuller/flagbase/web"
 )
 
@@ -43,6 +44,7 @@ func NewServer(
 	fnStore *function.Store,
 	frontendSvc *frontend.Service,
 	tableEng *table.Engine,
+	triggerEng *trigger.Engine,
 ) *Server {
 	gw := gateway.NewProxyHandler(featureEng)
 	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
@@ -50,6 +52,7 @@ func NewServer(
 	fh := &FunctionHandlers{Functions: fnStore}
 	ffh := &FrontendHandlers{Frontends: frontendSvc}
 	th := &TableHandlers{Tables: tableEng}
+	trh := &TriggerHandlers{Triggers: triggerEng}
 
 	adminHTML, _ := web.FS.ReadFile("index.html")
 	serveAdmin := func(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +90,9 @@ func NewServer(
 		r.Get("/gateway/routes", h.ListGatewayRoutes)
 		r.With(RequireRole("admin")).Post("/gateway/routes", h.RegisterGatewayRoute)
 		r.With(RequireRole("admin")).Delete("/gateway/routes/{id}", h.DeleteGatewayRoute)
+		// HTTP trigger invocation (auth required; POST body forwarded as event data)
+		r.Get("/triggers/{id}/invoke", trh.InvokeHTTPTrigger)
+		r.Post("/triggers/{id}/invoke", trh.InvokeHTTPTrigger)
 	})
 
 	// Admin API (must be registered before the /admin/* SPA catch-all)
@@ -112,6 +118,12 @@ func NewServer(
 		r.Get("/functions/{id}/invocations", fh.ListFunctionInvocations)
 		r.Post("/functions/{id}/versions", fh.DeployFunctionVersion)
 		r.Get("/functions/{id}/scaffold", fh.GetFunctionScaffold)
+		r.Get("/functions/{id}/triggers", trh.ListFunctionTriggers)
+		r.Get("/triggers", trh.ListTriggers)
+		r.Post("/triggers", trh.CreateTrigger)
+		r.Get("/triggers/{id}", trh.GetTrigger)
+		r.Put("/triggers/{id}", trh.UpdateTrigger)
+		r.Delete("/triggers/{id}", trh.DeleteTrigger)
 	})
 
 	// Admin console SPA (served for all /admin/* paths not matched above)
