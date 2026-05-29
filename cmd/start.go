@@ -21,6 +21,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/logger"
 	"github.com/mtfuller/flagbase/internal/storage"
 	"github.com/mtfuller/flagbase/internal/table"
+	"github.com/mtfuller/flagbase/internal/trigger"
 	"github.com/mtfuller/flagbase/internal/worker"
 	"github.com/spf13/cobra"
 )
@@ -85,6 +86,17 @@ func runStart(_ *cobra.Command, _ []string) error {
 	tableEng := table.NewEngine(db)
 	fnStore.WithTables(tableEng)
 
+	// Wire event bus into storage and table engines for bucket/table-create events.
+	store.WithBus(bus)
+	tableEng.WithBus(bus)
+
+	// Create and start the trigger engine (NATS subscriptions + cron scheduler).
+	triggerEng := trigger.NewEngine(db, bus, fnStore)
+	if err := triggerEng.Start(context.Background()); err != nil {
+		return fmt.Errorf("trigger engine: %w", err)
+	}
+	defer triggerEng.Stop()
+
 	frontendSvc := frontend.NewService(db, store)
 
 	setupMgr := admin.NewSetupManager()
@@ -108,7 +120,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		fmt.Println()
 	}
 
-	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr, fnStore, frontendSvc, tableEng)
+	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr, fnStore, frontendSvc, tableEng, triggerEng)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

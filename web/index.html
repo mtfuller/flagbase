@@ -1332,9 +1332,10 @@ async function loadFunctionDetail(fn) {
     <button class="btn btn-danger btn-sm" onclick="deleteFn('${esc(fn.id)}','${esc(fn.name)}')">Delete</button>`);
   document.getElementById('page-title').textContent = 'Functions';
   try {
-    const [versions, invocations] = await Promise.all([
+    const [versions, invocations, triggers] = await Promise.all([
       GET(`/admin/api/functions/${fn.id}/versions`).catch(() => []),
       GET(`/admin/api/functions/${fn.id}/invocations`).catch(() => []),
+      GET(`/admin/api/functions/${fn.id}/triggers`).catch(() => []),
     ]);
     const breadcrumb = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:16px;font-size:13px;color:var(--text-2)">
       <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="closeFunctionDetail()">Functions</button>
@@ -1365,8 +1366,18 @@ async function loadFunctionDetail(fn) {
             ${esc(inv.error || inv.output || '(no output)')}
           </td>
         </tr>`).join('');
+    const triggerRows = triggers.length === 0
+      ? `<tr><td colspan="4" style="text-align:center;color:var(--text-3);padding:24px">No triggers yet. Add one to invoke this function automatically.</td></tr>`
+      : triggers.map(t => `<tr>
+          <td>${triggerTypeBadge(t.event_type)}</td>
+          <td style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text-2)">${esc(triggerConfigSummary(t))}</td>
+          <td>${t.enabled ? '<span class="badge badge-green">enabled</span>' : '<span class="badge badge-red">disabled</span>'}</td>
+          <td>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px" onclick="deleteTrigger('${esc(t.id)}','${esc(fn.id)}','${esc(fn.name)}')">Delete</button>
+          </td>
+        </tr>`).join('');
     document.getElementById('content').innerHTML = breadcrumb + metaCard + `
-      <div style="display:grid;grid-template-columns:280px 1fr;gap:16px">
+      <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;margin-bottom:16px">
         <div class="card">
           <div class="card-header"><span class="card-title">Versions</span><span class="badge badge-blue">${versions.length}</span></div>
           <div class="table-wrap"><table>
@@ -1381,10 +1392,127 @@ async function loadFunctionDetail(fn) {
             <tbody>${invRows}</tbody>
           </table></div>
         </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Triggers</span><span class="badge badge-blue">${triggers.length}</span>
+          <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openAddTriggerModal('${esc(fn.id)}','${esc(fn.name)}')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Trigger
+          </button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Event</th><th>Config</th><th>Status</th><th></th></tr></thead>
+          <tbody>${triggerRows}</tbody>
+        </table></div>
       </div>`;
   } catch(err) {
     document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
   }
+}
+
+function triggerTypeBadge(eventType) {
+  const labels = { http: 'HTTP', bucket_create: 'Bucket Create', table_create: 'Table Create', cron: 'Cron' };
+  const colors = { http: 'badge-blue', bucket_create: 'badge-purple', table_create: 'badge-yellow', cron: 'badge-green' };
+  return `<span class="badge ${colors[eventType]||''}">${esc(labels[eventType]||eventType)}</span>`;
+}
+
+function triggerConfigSummary(t) {
+  const c = t.config || {};
+  switch (t.event_type) {
+    case 'http':       return `POST /api/v1/triggers/${t.id}/invoke`;
+    case 'bucket_create': return `bucket: ${c.bucket || '?'}`;
+    case 'table_create':  return `table: ${c.table_key || '?'}`;
+    case 'cron':       return `schedule: ${c.schedule || '?'}`;
+    default:           return JSON.stringify(c);
+  }
+}
+
+function openAddTriggerModal(fnId, fnName) {
+  openModal(`Add Trigger — ${esc(fnName)}`, `
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Event Type</label>
+        <select class="form-input form-select" id="trig-type" onchange="updateTriggerConfigFields()">
+          <option value="http">HTTP — invoke via HTTP request</option>
+          <option value="bucket_create">Bucket Create — object uploaded to storage bucket</option>
+          <option value="table_create">Table Create — row inserted into a table</option>
+          <option value="cron">Cron — scheduled on a cron expression</option>
+        </select>
+      </div>
+      <div id="trig-config-fields"></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="trig-enabled" checked style="width:16px;height:16px;accent-color:var(--primary)">
+        <label class="form-label" style="margin:0">Enabled</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createTrigger('${esc(fnId)}')">Create Trigger</button>
+    </div>`, false);
+  updateTriggerConfigFields();
+}
+
+function updateTriggerConfigFields() {
+  const type = document.getElementById('trig-type').value;
+  const el = document.getElementById('trig-config-fields');
+  if (type === 'http') {
+    el.innerHTML = `<div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:var(--radius);padding:12px;font-size:12px;color:var(--text-2);margin-bottom:14px">
+      The function will be invoked via <code style="color:var(--primary)">POST /api/v1/triggers/{id}/invoke</code>. The request body is forwarded as the event payload.
+    </div>`;
+  } else if (type === 'bucket_create') {
+    el.innerHTML = `<div class="form-group">
+      <label class="form-label">Bucket Name</label>
+      <input class="form-input" id="trig-bucket" placeholder="my-bucket">
+      <span class="form-hint">Fires when any object is uploaded to this bucket.</span>
+    </div>`;
+  } else if (type === 'table_create') {
+    el.innerHTML = `<div class="form-group">
+      <label class="form-label">Table Key</label>
+      <input class="form-input" id="trig-table-key" placeholder="orders">
+      <span class="form-hint">Fires when a new row is inserted into this table.</span>
+    </div>`;
+  } else if (type === 'cron') {
+    el.innerHTML = `<div class="form-group">
+      <label class="form-label">Cron Expression</label>
+      <input class="form-input" id="trig-schedule" placeholder="*/5 * * * *">
+      <span class="form-hint">Standard 5-field cron expression. Example: <code>0 * * * *</code> = every hour.</span>
+    </div>`;
+  }
+}
+
+async function createTrigger(fnId) {
+  const type = document.getElementById('trig-type').value;
+  const enabled = document.getElementById('trig-enabled').checked;
+  let config = {};
+  if (type === 'bucket_create') {
+    const bucket = (document.getElementById('trig-bucket')||{}).value||'';
+    if (!bucket) { toast('Bucket name is required', 'error'); return; }
+    config = { bucket };
+  } else if (type === 'table_create') {
+    const table_key = (document.getElementById('trig-table-key')||{}).value||'';
+    if (!table_key) { toast('Table key is required', 'error'); return; }
+    config = { table_key };
+  } else if (type === 'cron') {
+    const schedule = (document.getElementById('trig-schedule')||{}).value||'';
+    if (!schedule) { toast('Cron expression is required', 'error'); return; }
+    config = { schedule };
+  }
+  try {
+    await POST('/admin/api/triggers', { function_id: fnId, event_type: type, config, enabled });
+    closeModal();
+    toast('Trigger created');
+    loadFunctionDetail(currentFunction);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteTrigger(triggerId, fnId, fnName) {
+  if (!confirm(`Delete this trigger?`)) return;
+  try {
+    await req('DELETE', `/admin/api/triggers/${triggerId}`);
+    toast('Trigger deleted');
+    loadFunctionDetail(currentFunction);
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 function fnStatusBadge(status, errMsg) {

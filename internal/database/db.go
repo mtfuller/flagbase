@@ -145,4 +145,15 @@ CREATE TABLE IF NOT EXISTS table_columns (
 );
 
 CREATE INDEX IF NOT EXISTS idx_table_columns_table ON table_columns(table_key);
+
+CREATE TABLE IF NOT EXISTS function_triggers (
+    id          TEXT PRIMARY KEY,
+    function_id TEXT NOT NULL REFERENCES functions(id) ON DELETE CASCADE,
+    event_type  TEXT NOT NULL,
+    config      TEXT NOT NULL DEFAULT '{}',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_function_triggers_fn ON function_triggers(function_id);
 `

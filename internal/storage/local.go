@@ -2,11 +2,17 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 )
+
+// eventBus is the minimal publish interface used by LocalAdapter to emit bucket events.
+type eventBus interface {
+	Publish(subject string, data []byte) error
+}
 
 // BucketAdapter defines the object-storage port used by flagbase.
 // Local and cloud adapters implement this interface.
@@ -20,6 +26,7 @@ type BucketAdapter interface {
 // LocalAdapter stores objects as files under basePath/<bucket>/<objectName>.
 type LocalAdapter struct {
 	basePath string
+	bus      eventBus // optional; set via WithBus to enable bucket-create events
 }
 
 // NewLocalAdapter creates a LocalAdapter rooted at basePath.
@@ -27,7 +34,13 @@ func NewLocalAdapter(basePath string) *LocalAdapter {
 	return &LocalAdapter{basePath: basePath}
 }
 
-func (a *LocalAdapter) PutObject(_ context.Context, bucket, objectName string, reader io.Reader) error {
+// WithBus attaches an event bus so the adapter publishes flagbase.bucket.{bucket}.created
+// messages after every successful PutObject on a user-created bucket.
+func (a *LocalAdapter) WithBus(bus eventBus) {
+	a.bus = bus
+}
+
+func (a *LocalAdapter) PutObject(ctx context.Context, bucket, objectName string, reader io.Reader) error {
 	fullPath := filepath.Join(a.basePath, bucket, objectName)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return fmt.Errorf("creating object dir: %w", err)
@@ -38,7 +51,24 @@ func (a *LocalAdapter) PutObject(_ context.Context, bucket, objectName string, r
 	}
 	defer f.Close()
 	_, err = io.Copy(f, reader)
+	if err == nil && a.bus != nil && !isSystemBucket(bucket) {
+		data, _ := json.Marshal(map[string]string{
+			"bucket":      bucket,
+			"object_name": objectName,
+			"action":      "create",
+		})
+		_ = a.bus.Publish("flagbase.bucket."+bucket+".created", data)
+	}
 	return err
+}
+
+// isSystemBucket returns true for buckets managed internally by flagbase.
+func isSystemBucket(bucket string) bool {
+	switch bucket {
+	case "functions", "frontends":
+		return true
+	}
+	return false
 }
 
 // GetBasePath returns the root directory used by this adapter.

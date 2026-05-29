@@ -71,14 +71,26 @@ type QueryOptions struct {
 	Offset  int      `json:"offset"`
 }
 
+// eventBus is the minimal publish interface used by Engine to emit table row events.
+type eventBus interface {
+	Publish(subject string, data []byte) error
+}
+
 // Engine manages user-defined tables: schema registry + physical SQLite tables.
 type Engine struct {
-	db *sql.DB
+	db  *sql.DB
+	bus eventBus // optional; set via WithBus to enable table-create events
 }
 
 // NewEngine creates a table Engine backed by the supplied database.
 func NewEngine(db *sql.DB) *Engine {
 	return &Engine{db: db}
+}
+
+// WithBus attaches an event bus so the engine publishes flagbase.table.{key}.created
+// messages after every successful InsertRecord.
+func (e *Engine) WithBus(bus eventBus) {
+	e.bus = bus
 }
 
 // CreateTable validates the definition, persists the schema, and creates the physical table.
