@@ -318,6 +318,10 @@ td.text-primary{color:var(--text)}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         Functions
       </div>
+      <div class="nav-item" data-page="tables" onclick="navigate('tables')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
+        Tables
+      </div>
     </div>
 
     <div class="sidebar-footer">
@@ -426,10 +430,12 @@ function boolBadge(v) {
 }
 
 // ═══════════════════════ ROUTER ══════════════════════════════
-const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', users:'Users', functions:'Functions'};
+const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', users:'Users', functions:'Functions', tables:'Tables'};
 
 function navigate(page) {
   if (page !== 'storage') currentBucket = null;
+  if (page !== 'tables') currentTable = null;
+  if (page !== 'functions') currentFunction = null;
   S.page = page;
   document.getElementById('page-title').textContent = pageTitles[page] || page;
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -448,6 +454,7 @@ function loadPage(page) {
     storage: loadStorage,
     users: loadUsers,
     functions: loadFunctions,
+    tables: loadTables,
   }[page] || loadDashboard)();
 }
 
@@ -1177,6 +1184,7 @@ async function confirmDeleteUser(id) {
 }
 
 // ═══════════════════════ FUNCTIONS ════════════════════════════
+let currentFunction = null;
 
 function fnDeployGuideHTML() {
   const server = window.location.origin;
@@ -1227,6 +1235,10 @@ function copyToken() {
 }
 
 async function loadFunctions() {
+  if (currentFunction) {
+    await loadFunctionDetail(currentFunction);
+    return;
+  }
   setActions(`<button class="btn btn-ghost btn-sm" onclick="showDeployGuide()">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
     Deploy guide
@@ -1266,13 +1278,12 @@ flagbase fn deploy</button>
     }
     document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Language</th><th>Runtime</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Runtime</th><th>Status</th><th>Created</th><th></th></tr></thead>
         <tbody>${fns.map(fn => `<tr>
           <td>
-            <span class="text-primary">${esc(fn.name)}</span>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-weight:600" onclick='openFunctionDetail(${JSON.stringify(fn)})'>${esc(fn.name)}</button>
             ${fn.description ? `<div style="font-size:11px;color:var(--text-3);margin-top:2px">${esc(fn.description)}</div>` : ''}
           </td>
-          <td>${fnLangBadge(fn.language)}</td>
           <td><span style="font-size:12px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${esc(fn.runtime||'—')}</span></td>
           <td>${fnStatusBadge(fn.status, fn.error)}</td>
           <td style="color:var(--text-2)">${fmtDate(fn.created_at)}</td>
@@ -1280,9 +1291,6 @@ flagbase fn deploy</button>
             ${fn.status === 'ready' ? `<button class="btn btn-ghost btn-sm btn-icon" onclick="invokeFn('${esc(fn.id)}','${esc(fn.name)}')" title="Invoke">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             </button>` : ''}
-            <button class="btn btn-ghost btn-sm btn-icon" onclick="viewFnVersions('${esc(fn.id)}','${esc(fn.name)}')" title="Version history">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            </button>
             <button class="btn btn-danger btn-sm btn-icon" onclick="deleteFn('${esc(fn.id)}','${esc(fn.name)}')" title="Delete">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
             </button>
@@ -1295,10 +1303,88 @@ flagbase fn deploy</button>
   }
 }
 
-function fnLangBadge(lang) {
-  if (lang === 'go') return `<span class="badge badge-blue">Go</span>`;
-  if (lang === 'javascript') return `<span class="badge badge-yellow">JavaScript</span>`;
-  return `<span class="badge">${esc(lang)}</span>`;
+function openFunctionDetail(fn) {
+  currentFunction = fn;
+  loadFunctionDetail(fn);
+}
+
+function closeFunctionDetail() {
+  currentFunction = null;
+  loadFunctions();
+}
+
+function formatDuration(start, end) {
+  const ms = new Date(end) - new Date(start);
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+}
+
+async function loadFunctionDetail(fn) {
+  setActions(`
+    <button class="btn btn-ghost btn-sm" onclick="closeFunctionDetail()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+      All Functions
+    </button>
+    ${fn.status === 'ready' ? `<button class="btn btn-primary btn-sm" onclick="invokeFn('${esc(fn.id)}','${esc(fn.name)}')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Invoke
+    </button>` : ''}
+    <button class="btn btn-danger btn-sm" onclick="deleteFn('${esc(fn.id)}','${esc(fn.name)}')">Delete</button>`);
+  document.getElementById('page-title').textContent = 'Functions';
+  try {
+    const [versions, invocations] = await Promise.all([
+      GET(`/admin/api/functions/${fn.id}/versions`).catch(() => []),
+      GET(`/admin/api/functions/${fn.id}/invocations`).catch(() => []),
+    ]);
+    const breadcrumb = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:16px;font-size:13px;color:var(--text-2)">
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="closeFunctionDetail()">Functions</button>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      <span style="color:var(--text)">${esc(fn.name)}</span>
+    </div>`;
+    const metaCard = `<div class="card" style="margin-bottom:16px">
+      <div class="card-body" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:20px">
+        <div><div class="stat-label">Runtime</div><div style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--text)">${esc(fn.runtime||'—')}</div></div>
+        <div><div class="stat-label">Status</div><div style="margin-top:6px">${fnStatusBadge(fn.status, fn.error)}</div></div>
+        <div><div class="stat-label">Created</div><div style="margin-top:6px;color:var(--text-2);font-size:13px">${fmtDate(fn.created_at)}</div></div>
+        <div><div class="stat-label">Description</div><div style="margin-top:6px;color:var(--text-2);font-size:13px">${esc(fn.description||'—')}</div></div>
+      </div>
+    </div>`;
+    const versionsRows = versions.length === 0
+      ? `<tr><td colspan="2" style="text-align:center;color:var(--text-3);padding:24px">No versions yet.</td></tr>`
+      : versions.slice().reverse().map(v => `<tr>
+          <td><span class="badge badge-purple">v${v.version}</span></td>
+          <td style="color:var(--text-2)">${fmtDate(v.created_at)}</td>
+        </tr>`).join('');
+    const invRows = invocations.length === 0
+      ? `<tr><td colspan="4" style="text-align:center;color:var(--text-3);padding:24px">No invocations yet. Hit Invoke to run the function.</td></tr>`
+      : invocations.map(inv => `<tr>
+          <td style="color:var(--text-2)">${fmtDate(inv.started_at)}</td>
+          <td>${inv.success ? '<span class="badge badge-green">success</span>' : '<span class="badge badge-red">error</span>'}</td>
+          <td style="font-size:12px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${inv.completed_at ? formatDuration(inv.started_at, inv.completed_at) : '—'}</td>
+          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-family:'JetBrains Mono',monospace;color:${inv.success ? '#a5b4fc' : 'var(--danger)'}">
+            ${esc(inv.error || inv.output || '(no output)')}
+          </td>
+        </tr>`).join('');
+    document.getElementById('content').innerHTML = breadcrumb + metaCard + `
+      <div style="display:grid;grid-template-columns:280px 1fr;gap:16px">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Versions</span><span class="badge badge-blue">${versions.length}</span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Version</th><th>Deployed</th></tr></thead>
+            <tbody>${versionsRows}</tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Invocations</span><span class="badge badge-blue">${invocations.length}</span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>When</th><th>Result</th><th>Duration</th><th>Output</th></tr></thead>
+            <tbody>${invRows}</tbody>
+          </table></div>
+        </div>
+      </div>`;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
 }
 
 function fnStatusBadge(status, errMsg) {
@@ -1381,29 +1467,6 @@ async function runFnStream(id) {
   }
 }
 
-async function viewFnVersions(id, name) {
-  try {
-    const versions = await GET(`/admin/api/functions/${id}/versions`);
-    const rows = versions.length === 0
-      ? `<tr><td colspan="2" style="text-align:center;color:var(--text-3);padding:24px">No versions recorded yet.</td></tr>`
-      : versions.slice().reverse().map(v => `<tr>
-          <td><span class="badge badge-purple">v${v.version}</span></td>
-          <td style="color:var(--text-2)">${fmtDate(v.created_at)}</td>
-        </tr>`).join('');
-    openModal(`Version history: ${esc(name)}`, `
-      <div class="modal-body">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Version</th><th>Deployed at</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-        <p style="font-size:12px;color:var(--text-3);margin-top:14px">The latest version is always the active one. Re-run <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">flagbase fn deploy</code> to push a new version.</p>
-      </div>
-      <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>`);
-  } catch(err) { toast(err.message, 'error'); }
-}
-
 function deleteFn(id, name) {
   openModal('Delete Function', `
     <div class="modal-body">
@@ -1419,6 +1482,437 @@ async function confirmDeleteFn(id) {
   try {
     await DEL('/admin/api/functions/' + id);
     closeModal(); toast('Function deleted'); loadFunctions();
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+// ═══════════════════════ TABLES ═══════════════════════════════
+let currentTable = null;
+let _tableDefs = {};  // key → TableDef cache
+
+async function loadTables() {
+  if (currentTable) {
+    await loadTableDetail(currentTable);
+  } else {
+    await loadTableList();
+  }
+}
+
+async function loadTableList() {
+  setActions(`<button class="btn btn-primary btn-sm" onclick="openCreateTableModal()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Table
+  </button>`);
+  document.getElementById('page-title').textContent = 'Tables';
+  try {
+    const tables = await GET('/api/v1/tables/');
+    if (!tables || tables.length === 0) {
+      document.getElementById('content').innerHTML = `<div class="empty-state">
+        <div class="empty-icon">🗃️</div>
+        <div class="empty-title">No tables yet</div>
+        <div class="empty-text">Create a table to store structured data with a defined schema.</div>
+        <button class="btn btn-primary" onclick="openCreateTableModal()">Create your first table</button>
+      </div>`;
+      return;
+    }
+    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+      <table>
+        <thead><tr><th>Key</th><th>Name</th><th>Description</th><th>Columns</th><th>Created</th><th></th></tr></thead>
+        <tbody>${tables.map(t => `<tr>
+          <td>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-family:monospace" onclick="openTable('${esc(t.key)}')">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
+              ${esc(t.key)}
+            </button>
+          </td>
+          <td class="text-primary">${esc(t.name)}</td>
+          <td style="color:var(--text-3)">${esc(t.description||'')}</td>
+          <td><span class="badge badge-blue">${(t.columns||[]).length} col${(t.columns||[]).length!==1?'s':''}</span></td>
+          <td style="color:var(--text-2)">${fmtDate(t.created_at)}</td>
+          <td>
+            <button class="btn btn-danger btn-sm btn-icon" onclick="deleteTableDef('${esc(t.key)}')" title="Delete table">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            </button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div></div>`;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+function openTable(key) {
+  currentTable = key;
+  loadTableDetail(key);
+}
+
+function closeTable() {
+  currentTable = null;
+  loadTableList();
+}
+
+async function loadTableDetail(key) {
+  document.getElementById('page-title').textContent = 'Tables';
+  try {
+    const def = await GET(`/api/v1/tables/${key}`);
+    _tableDefs[key] = def;
+    const cols = def.columns || [];
+
+    setActions(`
+      <button class="btn btn-ghost btn-sm" onclick="closeTable()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        All Tables
+      </button>
+      <button class="btn btn-ghost btn-sm" onclick="openAddColumnModal('${esc(key)}')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Column
+      </button>
+      <button class="btn btn-primary btn-sm" onclick="openCreateRecordModal('${esc(key)}')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Record
+      </button>`);
+
+    const records = await GET(`/api/v1/tables/${key}/records`).catch(() => []);
+
+    const breadcrumb = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:16px;font-size:13px;color:var(--text-2)">
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="closeTable()">Tables</button>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      <span style="color:var(--text);font-family:monospace">${esc(key)}</span>
+      ${def.name !== key ? `<span style="color:var(--text-3)">— ${esc(def.name)}</span>` : ''}
+    </div>`;
+
+    const sysRows = ['_id','_created_at','_updated_at'].map(n => `<tr>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-3)">${n}</td>
+      <td><span class="badge" style="background:rgba(255,255,255,.05);color:var(--text-3)">${n==='_id'?'text':'datetime'}</span></td>
+      <td style="color:var(--text-3)">—</td><td style="color:var(--text-3)">—</td>
+    </tr>`).join('');
+    const colRows = cols.map(c => `<tr>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${esc(c.name)}</td>
+      <td><span class="badge badge-blue">${esc(c.type)}</span></td>
+      <td>${c.nullable ? '<span class="badge badge-green">yes</span>' : '<span style="color:var(--text-3)">—</span>'}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-2)">${c.default!=null?esc(c.default):'<span style="color:var(--text-3)">—</span>'}</td>
+    </tr>`).join('');
+
+    const schemaCard = `<div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <span class="card-title">Schema</span>
+        <button class="btn btn-ghost btn-sm" onclick="openAddColumnModal('${esc(key)}')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add Column
+        </button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Column</th><th>Type</th><th>Nullable</th><th>Default</th></tr></thead>
+        <tbody>${sysRows}${colRows || '<tr><td colspan="4" style="text-align:center;color:var(--text-3);padding:16px">No user columns yet — add one above.</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+
+    let recordsCard;
+    if (cols.length === 0) {
+      recordsCard = `<div class="card"><div class="empty-state">
+        <div class="empty-icon">📋</div>
+        <div class="empty-title">No columns defined</div>
+        <div class="empty-text">Add at least one column before inserting records.</div>
+      </div></div>`;
+    } else {
+      const colHeaders = cols.map(c => `<th>${esc(c.name)}</th>`).join('');
+      const recRows = records.length === 0
+        ? `<tr><td colspan="${cols.length+3}" style="text-align:center;color:var(--text-3);padding:24px">No records yet.</td></tr>`
+        : records.map(r => {
+            const colCells = cols.map(c => {
+              const v = r.data && r.data[c.name] != null ? String(r.data[c.name]) : null;
+              return `<td style="font-size:12px">${v !== null ? esc(v) : '<span style="color:var(--text-3)">null</span>'}</td>`;
+            }).join('');
+            return `<tr>
+              <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-3);max-width:120px;overflow:hidden;text-overflow:ellipsis">${esc(r._id)}</td>
+              ${colCells}
+              <td style="color:var(--text-2);font-size:12px">${fmtDate(r._created_at)}</td>
+              <td style="white-space:nowrap;display:flex;gap:4px">
+                <button class="btn btn-ghost btn-sm btn-icon" onclick='openEditRecordModal("${esc(key)}","${esc(r._id)}",${JSON.stringify(r.data||{})})' title="Edit">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>
+                <button class="btn btn-danger btn-sm btn-icon" onclick="deleteRecord('${esc(key)}','${esc(r._id)}')" title="Delete">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                </button>
+              </td>
+            </tr>`;
+          }).join('');
+
+      recordsCard = `<div class="card">
+        <div class="card-header">
+          <span class="card-title">Records</span>
+          <span class="badge badge-blue">${records.length} row${records.length!==1?'s':''}</span>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>_id</th>${colHeaders}<th>Created</th><th></th></tr></thead>
+          <tbody>${recRows}</tbody>
+        </table></div>
+      </div>`;
+    }
+
+    document.getElementById('content').innerHTML = breadcrumb + schemaCard + recordsCard;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+// --- Table schema modals ---
+
+let tableColumns = []; // columns being built in create-table modal
+
+function openCreateTableModal() {
+  tableColumns = [];
+  openModal('Create Table', createTableModalHTML(), true);
+  renderTableColumns();
+}
+
+function createTableModalHTML() {
+  return `
+    <div class="modal-body">
+      <div class="form-row form-row-2">
+        <div class="form-group">
+          <label class="form-label">Key</label>
+          <input class="form-input" id="tbl-key" type="text" placeholder="my_table" required>
+          <div class="form-hint">Lowercase letters, numbers, underscores. Cannot be changed.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Name</label>
+          <input class="form-input" id="tbl-name" type="text" placeholder="My Table" required>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description <span style="color:var(--text-3);font-weight:400">(optional)</span></label>
+        <input class="form-input" id="tbl-desc" type="text" placeholder="What does this table store?">
+      </div>
+      <div class="rules-header" style="margin-top:8px">
+        <span class="rules-label">Columns</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="addTableColumn()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add Column
+        </button>
+      </div>
+      <div id="tbl-cols-container"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createTable()">Create Table</button>
+    </div>`;
+}
+
+function renderTableColumns() {
+  const c = document.getElementById('tbl-cols-container');
+  if (!c) return;
+  if (tableColumns.length === 0) {
+    c.innerHTML = '<div class="rules-empty">No columns. You can add columns after creation too.</div>';
+    return;
+  }
+  c.innerHTML = tableColumns.map((col, i) => `
+    <div class="rule-row">
+      <div style="display:grid;grid-template-columns:1.5fr 1.2fr auto auto;gap:8px;align-items:center">
+        <input class="form-input" type="text" placeholder="column_name" value="${esc(col.name||'')}" onchange="tableColumns[${i}].name=this.value">
+        <select class="form-input form-select" onchange="tableColumns[${i}].type=this.value">
+          ${['text','integer','real','boolean'].map(t => `<option value="${t}" ${col.type===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+        <div class="toggle-wrap" style="gap:5px">
+          <label class="toggle" style="width:34px;height:18px">
+            <input type="checkbox" ${col.nullable?'checked':''} onchange="tableColumns[${i}].nullable=this.checked">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-label" style="font-size:11px">nullable</span>
+        </div>
+        <button class="rule-del" type="button" onclick="removeTableColumn(${i})">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>`).join('');
+}
+
+function addTableColumn() {
+  tableColumns.push({name:'', type:'text', nullable:true});
+  renderTableColumns();
+}
+
+function removeTableColumn(i) { tableColumns.splice(i, 1); renderTableColumns(); }
+
+async function createTable() {
+  const key = document.getElementById('tbl-key').value.trim();
+  const name = document.getElementById('tbl-name').value.trim();
+  if (!key || !name) { toast('Key and Name are required', 'error'); return; }
+  const columns = tableColumns.filter(c => c.name.trim());
+  try {
+    await POST('/api/v1/tables/', {key, name, description: document.getElementById('tbl-desc').value.trim(), columns});
+    closeModal(); toast('Table created'); currentTable = key; loadTableDetail(key);
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+function deleteTableDef(key) {
+  openModal('Delete Table', `
+    <div class="modal-body">
+      <p style="color:var(--text-2)">Delete table <strong style="color:var(--text);font-family:monospace">${esc(key)}</strong> and all its records? This cannot be undone.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDeleteTable('${esc(key)}')">Delete Table</button>
+    </div>`);
+}
+
+async function confirmDeleteTable(key) {
+  try {
+    await DEL(`/api/v1/tables/${key}`);
+    closeModal(); toast('Table deleted'); currentTable = null; loadTableList();
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+function openAddColumnModal(key) {
+  openModal(`Add Column — ${esc(key)}`, `
+    <div class="modal-body">
+      <div class="form-row form-row-2">
+        <div class="form-group">
+          <label class="form-label">Column Name</label>
+          <input class="form-input" id="col-name" type="text" placeholder="my_column" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select class="form-input form-select" id="col-type">
+            <option value="text">text</option>
+            <option value="integer">integer</option>
+            <option value="real">real</option>
+            <option value="boolean">boolean</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row form-row-2">
+        <div class="toggle-wrap" style="padding-top:8px">
+          <label class="toggle"><input type="checkbox" id="col-nullable" checked><span class="toggle-slider"></span></label>
+          <span class="toggle-label">Nullable</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Default <span style="color:var(--text-3);font-weight:400">(optional)</span></label>
+          <input class="form-input" id="col-default" type="text" placeholder="leave blank for none">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="addColumn('${esc(key)}')">Add Column</button>
+    </div>`);
+}
+
+async function addColumn(key) {
+  const name = document.getElementById('col-name').value.trim();
+  if (!name) { toast('Column name is required', 'error'); return; }
+  const col = {
+    name,
+    type: document.getElementById('col-type').value,
+    nullable: document.getElementById('col-nullable').checked,
+  };
+  const defVal = document.getElementById('col-default').value.trim();
+  if (defVal) col.default = defVal;
+  try {
+    await POST(`/api/v1/tables/${key}/columns`, {columns: [col]});
+    closeModal(); toast('Column added'); loadTableDetail(key);
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+// --- Record modals ---
+
+function recordFormFields(cols, data) {
+  return cols.map(c => {
+    const val = data && data[c.name] != null ? String(data[c.name]) : '';
+    let input;
+    if (c.type === 'boolean') {
+      input = `<div class="toggle-wrap">
+        <label class="toggle"><input type="checkbox" id="rec-${esc(c.name)}" ${val==='true'?'checked':''}><span class="toggle-slider"></span></label>
+        <span class="toggle-label">${val==='true'?'true':'false'}</span>
+      </div>`;
+    } else {
+      input = `<input class="form-input" id="rec-${esc(c.name)}" type="${c.type==='integer'||c.type==='real'?'number':' text'}" value="${esc(val)}" placeholder="${c.nullable?'null (optional)':'required'}">`;
+    }
+    return `<div class="form-group">
+      <label class="form-label">${esc(c.name)} <span class="badge" style="background:rgba(255,255,255,.05);color:var(--text-3);font-size:10px">${esc(c.type)}</span></label>
+      ${input}
+    </div>`;
+  }).join('');
+}
+
+function collectRecordData(cols) {
+  const data = {};
+  for (const c of cols) {
+    if (c.type === 'boolean') {
+      data[c.name] = document.getElementById('rec-' + c.name).checked;
+    } else {
+      const v = document.getElementById('rec-' + c.name).value;
+      if (v === '' && c.nullable) {
+        data[c.name] = null;
+      } else if (c.type === 'integer') {
+        data[c.name] = parseInt(v, 10);
+      } else if (c.type === 'real') {
+        data[c.name] = parseFloat(v);
+      } else {
+        data[c.name] = v;
+      }
+    }
+  }
+  return data;
+}
+
+function openCreateRecordModal(key) {
+  const def = _tableDefs[key];
+  if (!def || !def.columns || def.columns.length === 0) { toast('No columns defined on this table', 'error'); return; }
+  openModal(`New Record — ${esc(key)}`, `
+    <div class="modal-body">${recordFormFields(def.columns, null)}</div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createRecord('${esc(key)}')">Create Record</button>
+    </div>`);
+}
+
+async function createRecord(key) {
+  const def = _tableDefs[key];
+  if (!def) return;
+  const data = collectRecordData(def.columns);
+  try {
+    await POST(`/api/v1/tables/${key}/records`, data);
+    closeModal(); toast('Record created'); loadTableDetail(key);
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+function openEditRecordModal(key, id, existingData) {
+  const def = _tableDefs[key];
+  if (!def || !def.columns) return;
+  openModal(`Edit Record`, `
+    <div class="modal-body">${recordFormFields(def.columns, existingData)}</div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="updateRecord('${esc(key)}','${esc(id)}')">Save Changes</button>
+    </div>`);
+}
+
+async function updateRecord(key, id) {
+  const def = _tableDefs[key];
+  if (!def) return;
+  const data = collectRecordData(def.columns);
+  try {
+    await PUT(`/api/v1/tables/${key}/records/${id}`, data);
+    closeModal(); toast('Record updated'); loadTableDetail(key);
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+function deleteRecord(key, id) {
+  openModal('Delete Record', `
+    <div class="modal-body">
+      <p style="color:var(--text-2)">Delete record <strong style="color:var(--text);font-family:monospace">${esc(id)}</strong>? This cannot be undone.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDeleteRecord('${esc(key)}','${esc(id)}')">Delete Record</button>
+    </div>`);
+}
+
+async function confirmDeleteRecord(key, id) {
+  try {
+    await DEL(`/api/v1/tables/${key}/records/${id}`);
+    closeModal(); toast('Record deleted'); loadTableDetail(key);
   } catch(err) { toast(err.message, 'error'); }
 }
 

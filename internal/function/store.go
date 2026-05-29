@@ -42,6 +42,17 @@ type FunctionVersion struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// FunctionInvocation records a single execution of a function.
+type FunctionInvocation struct {
+	ID          string     `json:"id"`
+	FunctionID  string     `json:"function_id"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	Success     bool       `json:"success"`
+	Output      string     `json:"output,omitempty"`
+	Error       string     `json:"error,omitempty"`
+}
+
 // Store manages function lifecycle: persistence, compilation, and invocation.
 type Store struct {
 	db     *sql.DB
@@ -207,19 +218,31 @@ func (s *Store) InvokeStream(ctx context.Context, id string, timeout time.Durati
 		return fmt.Errorf("function is not ready (status: %s)", fn.Status)
 	}
 
+	invID, _ := s.startInvocation(ctx, id)
+	var capBuf bytes.Buffer
+	mw := io.MultiWriter(w, &capBuf)
+
+	var invokeErr error
 	switch compiler.Runtime(fn.Runtime) {
 	case compiler.RuntimeWASM:
-		return s.invokeWASMStream(ctx, fn, timeout, w)
+		invokeErr = s.invokeWASMStream(ctx, fn, timeout, mw)
 	case compiler.RuntimeJS:
-		out, err := s.invokeJS(fn, timeout)
-		if err != nil {
-			return err
+		var out []byte
+		out, invokeErr = s.invokeJS(fn, timeout)
+		if invokeErr == nil {
+			_, invokeErr = w.Write(out)
+			capBuf.Write(out) //nolint:errcheck
 		}
-		_, err = w.Write(out)
-		return err
 	default:
-		return fmt.Errorf("unknown runtime: %s", fn.Runtime)
+		invokeErr = fmt.Errorf("unknown runtime: %s", fn.Runtime)
 	}
+
+	errMsg := ""
+	if invokeErr != nil {
+		errMsg = invokeErr.Error()
+	}
+	_ = s.completeInvocation(ctx, invID, capBuf.String(), errMsg)
+	return invokeErr
 }
 
 func (s *Store) invokeWASMStream(ctx context.Context, fn *Function, timeout time.Duration, w io.Writer) error {
@@ -304,14 +327,76 @@ func (s *Store) Invoke(ctx context.Context, id string, timeout time.Duration) ([
 		return nil, fmt.Errorf("function is not ready (status: %s)", fn.Status)
 	}
 
+	invID, _ := s.startInvocation(ctx, id)
+
+	var output []byte
+	var invokeErr error
 	switch compiler.Runtime(fn.Runtime) {
 	case compiler.RuntimeWASM:
-		return s.invokeWASM(ctx, fn, timeout)
+		output, invokeErr = s.invokeWASM(ctx, fn, timeout)
 	case compiler.RuntimeJS:
-		return s.invokeJS(fn, timeout)
+		output, invokeErr = s.invokeJS(fn, timeout)
 	default:
-		return nil, fmt.Errorf("unknown runtime: %s", fn.Runtime)
+		invokeErr = fmt.Errorf("unknown runtime: %s", fn.Runtime)
 	}
+
+	errMsg := ""
+	if invokeErr != nil {
+		errMsg = invokeErr.Error()
+	}
+	_ = s.completeInvocation(ctx, invID, string(output), errMsg)
+	return output, invokeErr
+}
+
+// startInvocation inserts a pending invocation record and returns its ID.
+func (s *Store) startInvocation(ctx context.Context, fnID string) (string, error) {
+	id, err := newID()
+	if err != nil {
+		return "", err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO function_invocations (id, function_id) VALUES (?, ?)`, id, fnID)
+	return id, err
+}
+
+// completeInvocation updates the invocation record with outcome information.
+func (s *Store) completeInvocation(ctx context.Context, invID, output, errMsg string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE function_invocations SET completed_at = CURRENT_TIMESTAMP, success = ?, output = ?, error = ? WHERE id = ?`,
+		errMsg == "", output, errMsg, invID)
+	return err
+}
+
+// ListInvocations returns the 100 most recent invocations for a function.
+func (s *Store) ListInvocations(ctx context.Context, fnID string) ([]FunctionInvocation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, function_id, started_at, completed_at, success, output, error
+		 FROM function_invocations WHERE function_id = ? ORDER BY started_at DESC LIMIT 100`, fnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var invs []FunctionInvocation
+	for rows.Next() {
+		var inv FunctionInvocation
+		var completedAt sql.NullTime
+		var errText string
+		if err := rows.Scan(&inv.ID, &inv.FunctionID, &inv.StartedAt, &completedAt,
+			&inv.Success, &inv.Output, &errText); err != nil {
+			return nil, err
+		}
+		if completedAt.Valid {
+			inv.CompletedAt = &completedAt.Time
+		}
+		if errText != "" {
+			inv.Error = errText
+		}
+		invs = append(invs, inv)
+	}
+	if invs == nil {
+		invs = []FunctionInvocation{}
+	}
+	return invs, nil
 }
 
 func (s *Store) invokeWASM(ctx context.Context, fn *Function, timeout time.Duration) ([]byte, error) {
