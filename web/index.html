@@ -1189,25 +1189,22 @@ function fnDeployGuideHTML() {
           <button class="cli-block" onclick="copySnippet(this,'go install github.com/mtfuller/flagbase@latest')" title="Click to copy">go install github.com/mtfuller/flagbase@latest</button>
         </div>
         <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">2 — Scaffold a new function</div>
-          <button class="cli-block" onclick="copySnippet(this,'flagbase fn init my-function')" title="Click to copy">flagbase fn init my-function</button>
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">2 — Log in</div>
+          <button class="cli-block" onclick="copySnippet(this,'flagbase auth login --server ${server}')" title="Click to copy">flagbase auth login --server ${server}</button>
         </div>
         <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">3 — Build and deploy</div>
-          <button class="cli-block" onclick="copySnippet(this,'cd my-function\\nflagbase fn build\\nFLAGBASE_SERVER=${server} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy')" title="Click to copy">cd my-function
-flagbase fn build
-FLAGBASE_SERVER=${server} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy</button>
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">3 — Scaffold a new function</div>
+          <button class="cli-block" onclick="copySnippet(this,'flagbase fn init my-function')" title="Click to copy">flagbase fn init my-function</button>
         </div>
-        <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-          <span style="font-size:12px;color:var(--text-3)">Replace <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">&lt;token&gt;</code> with your auth token.</span>
-          <button class="btn btn-ghost btn-sm" onclick="copyToken()">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-            Copy my token
-          </button>
+        <div style="padding:14px 16px">
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">4 — Build and deploy</div>
+          <button class="cli-block" onclick="copySnippet(this,'cd my-function\\nflagbase fn build\\nflagbase fn deploy')" title="Click to copy">cd my-function
+flagbase fn build
+flagbase fn deploy</button>
         </div>
       </div>
       <p style="font-size:12px;color:var(--text-3);margin-top:12px">
-        To deploy an existing function by ID: <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">flagbase fn pull &lt;id&gt;</code>
+        Re-running <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">flagbase fn deploy</code> pushes a new version automatically. To work on an existing function: <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">flagbase fn pull &lt;id&gt;</code>
       </p>
     </div>
     <div class="modal-footer">
@@ -1249,21 +1246,18 @@ async function loadFunctions() {
               <button class="cli-block" onclick="copySnippet(this,'go install github.com/mtfuller/flagbase@latest')" title="Click to copy">go install github.com/mtfuller/flagbase@latest</button>
             </div>
             <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">2 — Scaffold a new function</div>
-              <button class="cli-block" onclick="copySnippet(this,'flagbase fn init my-function')" title="Click to copy">flagbase fn init my-function</button>
+              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">2 — Log in</div>
+              <button class="cli-block" onclick="copySnippet(this,'flagbase auth login --server ${window.location.origin}')" title="Click to copy">flagbase auth login --server ${window.location.origin}</button>
             </div>
             <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">3 — Build and deploy</div>
-              <button class="cli-block" onclick="copySnippet(this,'cd my-function\\nflagbase fn build\\nFLAGBASE_SERVER=${window.location.origin} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy')" title="Click to copy">cd my-function
-flagbase fn build
-FLAGBASE_SERVER=${window.location.origin} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy</button>
+              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">3 — Scaffold a new function</div>
+              <button class="cli-block" onclick="copySnippet(this,'flagbase fn init my-function')" title="Click to copy">flagbase fn init my-function</button>
             </div>
-            <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-              <span style="font-size:12px;color:var(--text-3)">Replace <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">&lt;token&gt;</code> with your auth token.</span>
-              <button class="btn btn-ghost btn-sm" onclick="copyToken()">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                Copy my token
-              </button>
+            <div style="padding:14px 16px">
+              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">4 — Build and deploy</div>
+              <button class="cli-block" onclick="copySnippet(this,'cd my-function\\nflagbase fn build\\nflagbase fn deploy')" title="Click to copy">cd my-function
+flagbase fn build
+flagbase fn deploy</button>
             </div>
           </div>
         </div>
@@ -1286,8 +1280,8 @@ FLAGBASE_SERVER=${window.location.origin} FLAGBASE_TOKEN=&lt;token&gt; flagbase 
             ${fn.status === 'ready' ? `<button class="btn btn-ghost btn-sm btn-icon" onclick="invokeFn('${esc(fn.id)}','${esc(fn.name)}')" title="Invoke">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             </button>` : ''}
-            <button class="btn btn-ghost btn-sm btn-icon" onclick="viewFnSource('${esc(fn.id)}','${esc(fn.name)}')" title="View source">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="viewFnVersions('${esc(fn.id)}','${esc(fn.name)}')" title="Version history">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             </button>
             <button class="btn btn-danger btn-sm btn-icon" onclick="deleteFn('${esc(fn.id)}','${esc(fn.name)}')" title="Delete">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
@@ -1314,59 +1308,99 @@ function fnStatusBadge(status, errMsg) {
   return `<span class="badge">${esc(status)}</span>`;
 }
 
-async function invokeFn(id, name) {
+function invokeFn(id, name) {
   openModal(`Invoke: ${esc(name)}`, `
     <div class="modal-body">
-      <div class="form-group">
-        <label class="form-label">Timeout (seconds)</label>
-        <input class="form-input" id="fn-timeout" type="number" value="5" min="1" max="30" style="width:100px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <label class="form-label" style="margin:0;white-space:nowrap">Timeout</label>
+        <input class="form-input" id="fn-timeout" type="number" value="5" min="1" max="30" style="width:72px">
+        <span style="font-size:12px;color:var(--text-3)">seconds</span>
+        <button class="btn btn-primary btn-sm" id="fn-run-btn" onclick="runFnStream('${esc(id)}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run
+        </button>
       </div>
-      <div id="fn-output-wrap" style="display:none">
-        <label class="form-label" style="margin-bottom:6px">Output</label>
-        <pre id="fn-output" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;min-height:60px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
-      </div>
+      <pre id="fn-output" style="background:#0a0a12;border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;min-height:120px;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6"></pre>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
-      <button class="btn btn-primary" id="fn-run-btn" onclick="runFn('${esc(id)}')">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        Run
-      </button>
-    </div>`);
+    </div>`, true);
 }
 
-async function runFn(id) {
+async function runFnStream(id) {
   const timeout = parseInt(document.getElementById('fn-timeout').value, 10) || 5;
   const btn = document.getElementById('fn-run-btn');
+  const out = document.getElementById('fn-output');
+
   btn.disabled = true;
   btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin .8s linear infinite"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg> Running…`;
+  out.style.color = '#a5b4fc';
+  out.textContent = '';
+
   try {
-    const res = await POST(`/admin/api/functions/${id}/invoke`, {timeout_seconds: timeout});
-    document.getElementById('fn-output-wrap').style.display = 'block';
-    document.getElementById('fn-output').textContent = res.output || '(no output)';
+    const res = await fetch(`/admin/api/functions/${id}/invoke/stream?timeout=${timeout}`, {
+      headers: { 'Authorization': 'Bearer ' + S.token }
+    });
+    if (!res.ok) {
+      out.style.color = 'var(--danger)';
+      out.textContent = `HTTP ${res.status}: ${await res.text()}`;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split('\n\n');
+      buf = events.pop();
+      for (const ev of events) {
+        if (!ev.startsWith('data: ')) continue;
+        let payload;
+        try { payload = JSON.parse(ev.slice(6)); } catch { continue; }
+        if (payload.type === 'stdout') {
+          out.textContent += payload.data;
+          out.scrollTop = out.scrollHeight;
+        } else if (payload.type === 'error') {
+          out.style.color = 'var(--danger)';
+          out.textContent += (out.textContent ? '\n' : '') + '[error] ' + payload.message;
+          out.scrollTop = out.scrollHeight;
+        }
+      }
+    }
+    if (!out.textContent) out.textContent = '(no output)';
   } catch(err) {
-    document.getElementById('fn-output-wrap').style.display = 'block';
-    document.getElementById('fn-output').style.color = 'var(--danger)';
-    document.getElementById('fn-output').textContent = err.message;
+    out.style.color = 'var(--danger)';
+    out.textContent = 'Connection error: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run`;
   }
-  btn.disabled = false;
-  btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run`;
 }
 
-async function viewFnSource(id, name) {
+async function viewFnVersions(id, name) {
   try {
-    const fn = await GET(`/admin/api/functions/${id}`);
-    openModal(`Source: ${esc(name)}`, `
+    const versions = await GET(`/admin/api/functions/${id}/versions`);
+    const rows = versions.length === 0
+      ? `<tr><td colspan="2" style="text-align:center;color:var(--text-3);padding:24px">No versions recorded yet.</td></tr>`
+      : versions.slice().reverse().map(v => `<tr>
+          <td><span class="badge badge-purple">v${v.version}</span></td>
+          <td style="color:var(--text-2)">${fmtDate(v.created_at)}</td>
+        </tr>`).join('');
+    openModal(`Version history: ${esc(name)}`, `
       <div class="modal-body">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          ${fnLangBadge(fn.language)} ${fnStatusBadge(fn.status, fn.error)}
-          ${fn.error ? `<span style="color:var(--danger);font-size:12px;align-self:center">${esc(fn.error)}</span>` : ''}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Version</th><th>Deployed at</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
         </div>
-        <pre style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;max-height:420px;overflow:auto;white-space:pre;line-height:1.6">${esc(fn.source)}</pre>
+        <p style="font-size:12px;color:var(--text-3);margin-top:14px">The latest version is always the active one. Re-run <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">flagbase fn deploy</code> to push a new version.</p>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" onclick="closeModal()">Close</button>
-      </div>`, true);
+      <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>`);
   } catch(err) { toast(err.message, 'error'); }
 }
 

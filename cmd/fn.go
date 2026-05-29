@@ -102,6 +102,9 @@ func effectiveServer() string {
 	if v := os.Getenv("FLAGBASE_SERVER"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
+	if c := loadSavedCredentials(); c != nil && c.Server != "" {
+		return strings.TrimRight(c.Server, "/")
+	}
 	return "http://localhost:8080"
 }
 
@@ -109,7 +112,13 @@ func effectiveToken() string {
 	if fnToken != "" {
 		return fnToken
 	}
-	return os.Getenv("FLAGBASE_TOKEN")
+	if v := os.Getenv("FLAGBASE_TOKEN"); v != "" {
+		return v
+	}
+	if c := loadSavedCredentials(); c != nil && c.Token != "" {
+		return c.Token
+	}
+	return ""
 }
 
 func readProjectConfig(dir string) (*fnProjectConfig, error) {
@@ -186,15 +195,11 @@ echo "Built function.wasm ($(wc -c < function.wasm) bytes)"
 
 	fmt.Printf("Scaffolded function project in ./%s\n\n", dir)
 	fmt.Printf("Next steps:\n")
+	fmt.Printf("  flagbase auth login            # log in once and save your token\n")
 	fmt.Printf("  cd %s\n", dir)
 	fmt.Printf("  # edit main.go, then:\n")
 	fmt.Printf("  flagbase fn build              # compile to function.wasm\n")
-	fmt.Printf("  flagbase fn deploy --token <token>  # upload to %s\n\n", server)
-	fmt.Printf("Get a token:\n")
-	fmt.Printf("  curl -s -X POST %s/auth/login \\\n", server)
-	fmt.Printf("       -H 'Content-Type: application/json' \\\n")
-	fmt.Printf("       -d '{\"email\":\"you@example.com\",\"password\":\"secret\"}' | jq -r .token\n")
-	fmt.Printf("\n  # or open %s in your browser, log in, then click Deploy guide → Copy my token\n", server)
+	fmt.Printf("  flagbase fn deploy             # upload to %s\n", server)
 	return nil
 }
 
@@ -246,7 +251,7 @@ func runFnDeploy(_ *cobra.Command, args []string) error {
 
 	token := effectiveToken()
 	if token == "" {
-		return fmt.Errorf("auth token required: set FLAGBASE_TOKEN env or use --token flag")
+		return fmt.Errorf("auth token required: run 'flagbase auth login' or set --token / FLAGBASE_TOKEN")
 	}
 
 	wasmPath := filepath.Join(dir, "function.wasm")
@@ -264,13 +269,19 @@ func runFnDeploy(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// If a function_id is already recorded, delete the old one so the new
-	// deployment takes its place without accumulating stale records.
+	// If a function_id is recorded, deploy a new version on the existing function.
 	if cfg.FunctionID != "" {
-		fmt.Printf("Replacing existing function %s ...\n", cfg.FunctionID)
-		if delErr := deleteFunction(server, token, cfg.FunctionID); delErr != nil {
-			fmt.Printf("Warning: could not delete previous function (%v); continuing.\n", delErr)
+		fmt.Printf("Deploying new version for function %s ...\n", cfg.FunctionID)
+		version, err := deployVersion(server, token, cfg.FunctionID, wasmBytes)
+		if err == nil {
+			cfg.Server = server
+			if werr := writeProjectConfig(dir, cfg); werr != nil {
+				fmt.Printf("Warning: could not update .flagbase.json: %v\n", werr)
+			}
+			fmt.Printf("Deployed  name=%s  id=%s  version=v%d\n", name, cfg.FunctionID, version)
+			return nil
 		}
+		fmt.Printf("Warning: could not update existing function (%v); creating new.\n", err)
 	}
 
 	fmt.Printf("Uploading %s to %s ...\n", wasmPath, server)
@@ -336,6 +347,49 @@ func uploadWASM(server, token, name, description string, wasmBytes []byte) (*fnR
 	return &fn, nil
 }
 
+type fnVersionResponse struct {
+	ID         string `json:"id"`
+	FunctionID string `json:"function_id"`
+	Version    int    `json:"version"`
+}
+
+func deployVersion(server, token, id string, wasmBytes []byte) (int, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, err := mw.CreateFormFile("artifact", "function.wasm")
+	if err != nil {
+		return 0, fmt.Errorf("building upload: %w", err)
+	}
+	if _, err := fw.Write(wasmBytes); err != nil {
+		return 0, fmt.Errorf("writing wasm: %w", err)
+	}
+	mw.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server+"/admin/api/functions/"+id+"/versions", &body)
+	if err != nil {
+		return 0, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("uploading: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+
+	var v fnVersionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return 1, nil
+	}
+	return v.Version, nil
+}
+
 func deleteFunction(server, token, id string) error {
 	req, err := http.NewRequest(http.MethodDelete, server+"/admin/api/functions/"+id, nil)
 	if err != nil {
@@ -365,7 +419,7 @@ func runFnPull(_ *cobra.Command, args []string) error {
 	server := effectiveServer()
 	token := effectiveToken()
 	if token == "" {
-		return fmt.Errorf("auth token required: set FLAGBASE_TOKEN env or use --token flag")
+		return fmt.Errorf("auth token required: run 'flagbase auth login' or set --token / FLAGBASE_TOKEN")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, server+"/admin/api/functions/"+id+"/scaffold", nil)

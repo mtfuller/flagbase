@@ -33,6 +33,14 @@ type Function struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// FunctionVersion records a single deployment of a function.
+type FunctionVersion struct {
+	ID         string    `json:"id"`
+	FunctionID string    `json:"function_id"`
+	Version    int       `json:"version"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // Store manages function lifecycle: persistence, compilation, and invocation.
 type Store struct {
 	db     *sql.DB
@@ -126,7 +134,103 @@ func (s *Store) Upload(ctx context.Context, name, description string, wasmBytes 
 	}
 
 	_ = s.updateStatus(ctx, id, "ready", "", string(compiler.RuntimeWASM))
+	_, _ = s.createVersion(ctx, id)
 	return fn, nil
+}
+
+// DeployVersion uploads a new WASM artifact for an existing function,
+// overwrites the active artifact, and records a new version entry.
+func (s *Store) DeployVersion(ctx context.Context, id string, wasmBytes []byte) (*FunctionVersion, error) {
+	fn, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("loading function: %w", err)
+	}
+	if fn == nil {
+		return nil, fmt.Errorf("function not found")
+	}
+	if len(wasmBytes) < 4 || string(wasmBytes[:4]) != "\x00asm" {
+		return nil, fmt.Errorf("invalid artifact: missing WASM magic number (\\x00asm)")
+	}
+
+	if err := s.store.PutObject(ctx, functionsBucket, id+".wasm", bytes.NewReader(wasmBytes)); err != nil {
+		return nil, fmt.Errorf("storing artifact: %w", err)
+	}
+
+	_, _ = s.db.ExecContext(ctx,
+		`UPDATE functions SET status = 'ready', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+
+	return s.createVersion(ctx, id)
+}
+
+// ListVersions returns all deployment versions for a function, oldest first.
+func (s *Store) ListVersions(ctx context.Context, functionID string) ([]FunctionVersion, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, function_id, version, created_at
+		FROM function_versions WHERE function_id = ?
+		ORDER BY version ASC`, functionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var versions []FunctionVersion
+	for rows.Next() {
+		var v FunctionVersion
+		if err := rows.Scan(&v.ID, &v.FunctionID, &v.Version, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		versions = append(versions, v)
+	}
+	if versions == nil {
+		versions = []FunctionVersion{}
+	}
+	return versions, nil
+}
+
+// InvokeStream executes a ready function, writing its stdout output to w as
+// bytes arrive. This enables real-time streaming to HTTP clients.
+func (s *Store) InvokeStream(ctx context.Context, id string, timeout time.Duration, w io.Writer) error {
+	fn, err := s.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("loading function: %w", err)
+	}
+	if fn == nil {
+		return fmt.Errorf("function not found")
+	}
+	if fn.Status != "ready" {
+		return fmt.Errorf("function is not ready (status: %s)", fn.Status)
+	}
+
+	switch compiler.Runtime(fn.Runtime) {
+	case compiler.RuntimeWASM:
+		return s.invokeWASMStream(ctx, fn, timeout, w)
+	case compiler.RuntimeJS:
+		out, err := s.invokeJS(fn, timeout)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(out)
+		return err
+	default:
+		return fmt.Errorf("unknown runtime: %s", fn.Runtime)
+	}
+}
+
+func (s *Store) invokeWASMStream(ctx context.Context, fn *Function, timeout time.Duration, w io.Writer) error {
+	rc, err := s.store.GetObject(ctx, functionsBucket, fn.ID+".wasm")
+	if err != nil {
+		return fmt.Errorf("loading wasm artifact: %w", err)
+	}
+	defer rc.Close()
+	wasmBytes, err := io.ReadAll(rc)
+	if err != nil {
+		return fmt.Errorf("reading wasm bytes: %w", err)
+	}
+	deps := &HostDeps{
+		Storage: s.store,
+		Flags:   s.flags,
+		Store:   s,
+	}
+	return s.engine.InvokeWASIStream(ctx, wasmBytes, timeout, deps, w)
 }
 
 // List returns all functions ordered by creation date descending.
@@ -299,6 +403,33 @@ func artifactExt(rt compiler.Runtime) string {
 		return ".wasm"
 	}
 	return ".js"
+}
+
+func (s *Store) createVersion(ctx context.Context, functionID string) (*FunctionVersion, error) {
+	var maxVersion int
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(version), 0) FROM function_versions WHERE function_id = ?`,
+		functionID).Scan(&maxVersion)
+
+	id, err := newID()
+	if err != nil {
+		return nil, fmt.Errorf("generating version id: %w", err)
+	}
+	v := &FunctionVersion{
+		ID:         id,
+		FunctionID: functionID,
+		Version:    maxVersion + 1,
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO function_versions (id, function_id, version) VALUES (?, ?, ?)`,
+		v.ID, v.FunctionID, v.Version)
+	if err != nil {
+		return nil, fmt.Errorf("inserting version: %w", err)
+	}
+	// Fetch the created_at that was set by the DB default.
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT created_at FROM function_versions WHERE id = ?`, v.ID).Scan(&v.CreatedAt)
+	return v, nil
 }
 
 func newID() (string, error) {
