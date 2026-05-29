@@ -719,19 +719,19 @@ func main() {
 	}
 
 	// ── Bucket storage ────────────────────────────────────────────────────────
-	// Read a config object from bucket storage.
+	// Read an object from bucket storage.
 	raw, err := fnruntime.GetObject("my-bucket", "config.json")
 	if err != nil {
 		log.Printf("config not found: %%v", err)
 	} else {
 		var cfg map[string]interface{}
 		if err := json.Unmarshal(raw, &cfg); err == nil {
-			fmt.Printf("config loaded: %%v\n", cfg)
+			fmt.Printf("config: %%v\n", cfg)
 		}
 	}
 
 	// ── Table storage ─────────────────────────────────────────────────────────
-	// Insert a record. The host assigns an _id; PutRecord returns the saved row.
+	// Insert a record. The host assigns an _id and returns the saved row.
 	rec, err := fnruntime.PutRecord("events", map[string]interface{}{
 		"source": "%s",
 		"action": "invoked",
@@ -740,6 +740,14 @@ func main() {
 		log.Fatalf("insert failed: %%v", err)
 	}
 	fmt.Printf("created event %%s\n", rec.ID)
+
+	// Read the record back by ID.
+	saved, err := fnruntime.GetRecord("events", rec.ID)
+	if err != nil {
+		log.Printf("get record failed: %%v", err)
+	} else if saved != nil {
+		fmt.Printf("event action: %%s\n", saved.Data["action"])
+	}
 
 	// Query the table.
 	rows, err := fnruntime.QueryRecords("events", fnruntime.QueryOptions{Limit: 10})
@@ -754,7 +762,7 @@ func main() {
 // GoMod returns a go.mod for a function project.
 func GoMod(name string) []byte {
 	safeName := SafeName(name)
-	return []byte(fmt.Sprintf("module flagbase-fn-%s\n\ngo 1.21\n", safeName))
+	return []byte(fmt.Sprintf("module flagbase-fn-%s\n\ngo 1.22\n", safeName))
 }
 
 // Config returns the .flagbase.json for a function project.
@@ -792,11 +800,11 @@ func TestFunction(t *testing.T) {
 	// Seed a feature flag.
 	rt.SetFlag("my-feature", true)
 
-	// Seed a bucket object.
+	// Seed a bucket object that GetObject will read.
 	cfg, _ := json.Marshal(map[string]interface{}{"mode": "test"})
 	rt.PutObjectInBucket("my-bucket", "config.json", cfg)
 
-	// Seed a table row for read tests.
+	// Seed an existing table row.
 	rt.SeedRecord("events", "existing-1", map[string]interface{}{
 		"source": "seed",
 		"action": "setup",
@@ -808,16 +816,37 @@ func TestFunction(t *testing.T) {
 
 	main()
 
-	// Assert bucket side effects.
-	objects := rt.ObjectsInBucket("my-bucket")
-	t.Logf("bucket contains %%d object(s)", len(objects))
-
-	// Assert table side effects: our function inserts one new row.
+	// Assert table side effects: function inserts one new row.
 	rows := rt.RecordsInTable("events")
 	if len(rows) < 2 { // seeded row + inserted row
-		t.Fatalf("expected at least 2 rows, got %%d", len(rows))
+		t.Fatalf("expected at least 2 rows in 'events', got %%d", len(rows))
 	}
 	t.Logf("table 'events' has %%d row(s)", len(rows))
+}
+
+// TestFunctionGetRecord shows how to test reading a record by ID.
+func TestFunctionGetRecord(t *testing.T) {
+	rt := fnruntime.NewMockRuntime()
+
+	// Seed a specific record and verify it can be retrieved.
+	rt.SeedRecord("events", "evt-42", map[string]interface{}{
+		"source": "test",
+		"action": "seeded",
+	})
+
+	fnruntime.SetMockRuntime(rt)
+	defer fnruntime.SetMockRuntime(nil)
+
+	rec, err := fnruntime.GetRecord("events", "evt-42")
+	if err != nil {
+		t.Fatalf("GetRecord: %%v", err)
+	}
+	if rec == nil {
+		t.Fatal("expected record, got nil")
+	}
+	if rec.Data["action"] != "seeded" {
+		t.Fatalf("action: want %%q, got %%v", "seeded", rec.Data["action"])
+	}
 }
 
 // TestFunctionFlagDisabled shows how to test a branch where a flag is off.
@@ -833,9 +862,11 @@ func TestFunctionFlagDisabled(t *testing.T) {
 }
 
 // SafeName converts an arbitrary function name to a safe Go module name component.
+// Uppercase letters are lowercased; any character that is not a-z, 0-9, or '-'
+// is replaced with '-'.
 func SafeName(name string) string {
 	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
 			return r
 		}
 		if r >= 'A' && r <= 'Z' {
