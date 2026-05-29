@@ -18,6 +18,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/gateway"
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/storage"
+	"github.com/mtfuller/flagbase/internal/table"
 	"github.com/mtfuller/flagbase/web"
 )
 
@@ -41,12 +42,14 @@ func NewServer(
 	setupMgr *admin.SetupManager,
 	fnStore *function.Store,
 	frontendSvc *frontend.Service,
+	tableEng *table.Engine,
 ) *Server {
 	gw := gateway.NewProxyHandler(featureEng)
 	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
 	ah := &AdminHandlers{IAM: iamSvc, Setup: setupMgr, Store: store, DB: db}
 	fh := &FunctionHandlers{Functions: fnStore}
 	ffh := &FrontendHandlers{Frontends: frontendSvc}
+	th := &TableHandlers{Tables: tableEng}
 
 	adminHTML, _ := web.FS.ReadFile("index.html")
 	serveAdmin := func(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +138,21 @@ func NewServer(
 		http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
 	})
 	r.Get("/frontends/{slug}/*", ffh.ServeFrontend)
+
+	// Tables — NoSQL CRUD with schema registry
+	r.Route("/api/v1/tables", func(r chi.Router) {
+		r.Use(RequireRole("user"))
+		r.Get("/", th.ListTables)
+		r.Post("/", th.CreateTable)
+		r.Get("/{key}", th.GetTable)
+		r.Post("/{key}/columns", th.AddColumns)
+		r.Delete("/{key}", th.DeleteTable)
+		r.Get("/{key}/records", th.ListRecords)
+		r.Post("/{key}/records", th.CreateRecord)
+		r.Get("/{key}/records/{id}", th.GetRecord)
+		r.Put("/{key}/records/{id}", th.UpdateRecord)
+		r.Delete("/{key}/records/{id}", th.DeleteRecord)
+	})
 
 	// Gateway — dynamic reverse proxy
 	r.Handle("/gateway/*", gw)

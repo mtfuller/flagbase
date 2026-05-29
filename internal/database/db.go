@@ -112,4 +112,26 @@ CREATE TABLE IF NOT EXISTS frontend_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_frontend_versions_frontend ON frontend_versions(frontend_id);
+
+CREATE TABLE IF NOT EXISTS table_definitions (
+    key         TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS table_columns (
+    id          TEXT PRIMARY KEY,
+    table_key   TEXT NOT NULL REFERENCES table_definitions(key) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    col_type    TEXT NOT NULL,
+    nullable    BOOLEAN NOT NULL DEFAULT 1,
+    default_val TEXT,
+    position    INTEGER NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(table_key, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_table_columns_table ON table_columns(table_key);
 `

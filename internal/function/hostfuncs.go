@@ -11,6 +11,7 @@ import (
 
 	"github.com/mtfuller/flagbase/internal/feature"
 	"github.com/mtfuller/flagbase/internal/storage"
+	"github.com/mtfuller/flagbase/internal/table"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -74,7 +75,8 @@ func readBytes(m api.Module, ptr, length uint32) []byte {
 type HostDeps struct {
 	Storage storage.BucketAdapter
 	Flags   *feature.Engine
-	Store   *Store // for fn_invoke; may be nil to break init cycle
+	Store   *Store        // for fn_invoke; may be nil to break init cycle
+	Tables  *table.Engine // may be nil when tables feature is not wired
 }
 
 const errResult = uint32(0xFFFFFFFF)
@@ -317,6 +319,150 @@ func registerHostModule(ctx context.Context, rt wazero.Runtime, deps HostDeps) e
 			stack[0] = uint64(len(data))
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
 		Export("http_fetch")
+
+	// table_get(tableKeyPtr, tableKeyLen, idPtr, idLen uint32) uint32
+	// Returns the JSON-encoded Record in the result buffer, or errResult on error.
+	b.NewFunctionBuilder().
+		WithParameterNames("tableKeyPtr", "tableKeyLen", "idPtr", "idLen").
+		WithResultNames("resultLen").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
+			tableKey := readStr(m, uint32(stack[0]), uint32(stack[1]))
+			id := readStr(m, uint32(stack[2]), uint32(stack[3]))
+			st := invStateFromCtx(ctx)
+			if deps.Tables == nil {
+				st.setError(fmt.Errorf("table_get: tables not available"))
+				stack[0] = uint64(errResult)
+				return
+			}
+			rec, err := deps.Tables.GetRecord(tableKey, id)
+			if err != nil {
+				st.setError(fmt.Errorf("table_get: %w", err))
+				stack[0] = uint64(errResult)
+				return
+			}
+			if rec == nil {
+				st.setError(fmt.Errorf("table_get: record not found"))
+				stack[0] = uint64(errResult)
+				return
+			}
+			data, err := json.Marshal(rec)
+			if err != nil {
+				st.setError(fmt.Errorf("table_get: encoding result: %w", err))
+				stack[0] = uint64(errResult)
+				return
+			}
+			st.setResult(data)
+			stack[0] = uint64(len(data))
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("table_get")
+
+	// table_put(tableKeyPtr, tableKeyLen, dataPtr, dataLen uint32) uint32
+	// If data contains "_id", updates that record; otherwise inserts a new one.
+	// Returns the JSON-encoded Record in the result buffer.
+	b.NewFunctionBuilder().
+		WithParameterNames("tableKeyPtr", "tableKeyLen", "dataPtr", "dataLen").
+		WithResultNames("resultLen").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
+			tableKey := readStr(m, uint32(stack[0]), uint32(stack[1]))
+			rawData := readBytes(m, uint32(stack[2]), uint32(stack[3]))
+			st := invStateFromCtx(ctx)
+			if deps.Tables == nil {
+				st.setError(fmt.Errorf("table_put: tables not available"))
+				stack[0] = uint64(errResult)
+				return
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(rawData, &payload); err != nil {
+				st.setError(fmt.Errorf("table_put: invalid JSON: %w", err))
+				stack[0] = uint64(errResult)
+				return
+			}
+			var rec interface{}
+			var opErr error
+			if existingID, ok := payload["_id"].(string); ok && existingID != "" {
+				delete(payload, "_id")
+				rec, opErr = deps.Tables.UpdateRecord(tableKey, existingID, payload)
+			} else {
+				delete(payload, "_id")
+				rec, opErr = deps.Tables.InsertRecord(tableKey, payload)
+			}
+			if opErr != nil {
+				st.setError(fmt.Errorf("table_put: %w", opErr))
+				stack[0] = uint64(errResult)
+				return
+			}
+			data, err := json.Marshal(rec)
+			if err != nil {
+				st.setError(fmt.Errorf("table_put: encoding result: %w", err))
+				stack[0] = uint64(errResult)
+				return
+			}
+			st.setResult(data)
+			stack[0] = uint64(len(data))
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("table_put")
+
+	// table_delete(tableKeyPtr, tableKeyLen, idPtr, idLen uint32) uint32
+	// Returns 1 on success, 0 on error (error detail in error buffer).
+	b.NewFunctionBuilder().
+		WithParameterNames("tableKeyPtr", "tableKeyLen", "idPtr", "idLen").
+		WithResultNames("ok").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
+			tableKey := readStr(m, uint32(stack[0]), uint32(stack[1]))
+			id := readStr(m, uint32(stack[2]), uint32(stack[3]))
+			st := invStateFromCtx(ctx)
+			if deps.Tables == nil {
+				st.setError(fmt.Errorf("table_delete: tables not available"))
+				stack[0] = 0
+				return
+			}
+			if err := deps.Tables.DeleteRecord(tableKey, id); err != nil {
+				st.setError(fmt.Errorf("table_delete: %w", err))
+				stack[0] = 0
+				return
+			}
+			stack[0] = 1
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("table_delete")
+
+	// table_query(tableKeyPtr, tableKeyLen, optsPtr, optsLen uint32) uint32
+	// opts is a JSON-encoded QueryOptions. Returns a JSON array of Records.
+	b.NewFunctionBuilder().
+		WithParameterNames("tableKeyPtr", "tableKeyLen", "optsPtr", "optsLen").
+		WithResultNames("resultLen").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
+			tableKey := readStr(m, uint32(stack[0]), uint32(stack[1]))
+			optsBytes := readBytes(m, uint32(stack[2]), uint32(stack[3]))
+			st := invStateFromCtx(ctx)
+			if deps.Tables == nil {
+				st.setError(fmt.Errorf("table_query: tables not available"))
+				stack[0] = uint64(errResult)
+				return
+			}
+			var opts table.QueryOptions
+			if len(optsBytes) > 0 {
+				if err := json.Unmarshal(optsBytes, &opts); err != nil {
+					st.setError(fmt.Errorf("table_query: invalid opts JSON: %w", err))
+					stack[0] = uint64(errResult)
+					return
+				}
+			}
+			records, err := deps.Tables.QueryRecords(tableKey, opts)
+			if err != nil {
+				st.setError(fmt.Errorf("table_query: %w", err))
+				stack[0] = uint64(errResult)
+				return
+			}
+			data, err := json.Marshal(records)
+			if err != nil {
+				st.setError(fmt.Errorf("table_query: encoding result: %w", err))
+				stack[0] = uint64(errResult)
+				return
+			}
+			st.setResult(data)
+			stack[0] = uint64(len(data))
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("table_query")
 
 	_, err := b.Instantiate(ctx)
 	return err

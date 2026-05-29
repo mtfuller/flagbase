@@ -15,6 +15,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/compiler"
 	"github.com/mtfuller/flagbase/internal/feature"
 	"github.com/mtfuller/flagbase/internal/storage"
+	"github.com/mtfuller/flagbase/internal/table"
 )
 
 const functionsBucket = "functions"
@@ -47,10 +48,16 @@ type Store struct {
 	store  *storage.LocalAdapter
 	engine *Engine
 	flags  *feature.Engine
+	tables *table.Engine
 }
 
 func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine, flags *feature.Engine) *Store {
 	return &Store{db: db, store: store, engine: engine, flags: flags}
+}
+
+// WithTables injects the table engine so WASM functions can call table host functions.
+func (s *Store) WithTables(t *table.Engine) {
+	s.tables = t
 }
 
 // Create persists a new JavaScript function record and validates it synchronously.
@@ -229,6 +236,7 @@ func (s *Store) invokeWASMStream(ctx context.Context, fn *Function, timeout time
 		Storage: s.store,
 		Flags:   s.flags,
 		Store:   s,
+		Tables:  s.tables,
 	}
 	return s.engine.InvokeWASIStream(ctx, wasmBytes, timeout, deps, w)
 }
@@ -320,6 +328,7 @@ func (s *Store) invokeWASM(ctx context.Context, fn *Function, timeout time.Durat
 		Storage: s.store,
 		Flags:   s.flags,
 		Store:   s,
+		Tables:  s.tables,
 	}
 	return s.engine.InvokeWASI(ctx, wasmBytes, timeout, deps)
 }
