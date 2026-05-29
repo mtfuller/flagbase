@@ -322,6 +322,10 @@ td.text-primary{color:var(--text)}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
         Tables
       </div>
+      <div class="nav-item" data-page="frontends" onclick="navigate('frontends')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        Frontends
+      </div>
     </div>
 
     <div class="sidebar-footer">
@@ -430,12 +434,13 @@ function boolBadge(v) {
 }
 
 // ═══════════════════════ ROUTER ══════════════════════════════
-const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', users:'Users', functions:'Functions', tables:'Tables'};
+const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', users:'Users', functions:'Functions', tables:'Tables', frontends:'Frontends'};
 
 function navigate(page) {
   if (page !== 'storage') currentBucket = null;
   if (page !== 'tables') currentTable = null;
   if (page !== 'functions') currentFunction = null;
+  if (page !== 'frontends') currentFrontend = null;
   S.page = page;
   document.getElementById('page-title').textContent = pageTitles[page] || page;
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -455,6 +460,7 @@ function loadPage(page) {
     users: loadUsers,
     functions: loadFunctions,
     tables: loadTables,
+    frontends: loadFrontends,
   }[page] || loadDashboard)();
 }
 
@@ -2042,6 +2048,265 @@ async function confirmDeleteRecord(key, id) {
     await DEL(`/api/v1/tables/${key}/records/${id}`);
     closeModal(); toast('Record deleted'); loadTableDetail(key);
   } catch(err) { toast(err.message, 'error'); }
+}
+
+// ═══════════════════════ FRONTENDS ════════════════════════════
+let currentFrontend = null;
+
+async function loadFrontends() {
+  if (currentFrontend) {
+    await loadFrontendDetail(currentFrontend);
+    return;
+  }
+  setActions(`<button class="btn btn-primary btn-sm" onclick="openCreateFrontendModal()">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New Frontend
+  </button>`);
+  try {
+    const frontends = await GET('/api/v1/frontends/');
+    if (!frontends || frontends.length === 0) {
+      document.getElementById('content').innerHTML = `<div class="empty-state">
+        <div class="empty-icon">🖥</div>
+        <div class="empty-title">No frontends yet</div>
+        <div class="empty-text">Create a frontend to host static files served at <code>/frontends/&lt;slug&gt;/</code>. Upload ZIP archives as versioned deployments.</div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary btn-sm" onclick="openCreateFrontendModal()">Create Frontend</button>
+        </div>
+      </div>`;
+      return;
+    }
+    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Slug</th><th>Active Version</th><th>Created</th><th></th></tr></thead>
+        <tbody>${frontends.map(f => `<tr>
+          <td>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-weight:600" onclick='openFrontendDetail(${JSON.stringify(f)})'>${esc(f.name)}</button>
+            ${f.description ? `<div style="font-size:11px;color:var(--text-3);margin-top:2px">${esc(f.description)}</div>` : ''}
+          </td>
+          <td><span style="font-size:12px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${esc(f.slug)}</span></td>
+          <td>${f.active_version_id ? '<span class="badge badge-green">active</span>' : '<span class="badge" style="background:rgba(255,255,255,.05);color:var(--text-3)">none</span>'}</td>
+          <td style="color:var(--text-2)">${fmtDate(f.created_at)}</td>
+          <td style="display:flex;gap:6px">
+            <button class="btn btn-danger btn-sm btn-icon" onclick="deleteFrontend('${esc(f.id)}','${esc(f.name)}')" title="Delete">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            </button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div></div>`;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+function openFrontendDetail(f) {
+  currentFrontend = f;
+  loadFrontendDetail(f);
+}
+
+function closeFrontendDetail() {
+  currentFrontend = null;
+  loadFrontends();
+}
+
+async function loadFrontendDetail(f) {
+  const server = window.location.origin;
+  setActions(`
+    <button class="btn btn-ghost btn-sm" onclick="closeFrontendDetail()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+      All Frontends
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="openUploadVersionModal('${esc(f.id)}','${esc(f.name)}')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Upload Version
+    </button>
+    <button class="btn btn-danger btn-sm" onclick="deleteFrontend('${esc(f.id)}','${esc(f.name)}')">Delete</button>`);
+  document.getElementById('page-title').textContent = 'Frontends';
+  try {
+    const [frontend, versions] = await Promise.all([
+      GET(`/api/v1/frontends/${f.id}`),
+      GET(`/api/v1/frontends/${f.id}/versions`).catch(() => []),
+    ]);
+    currentFrontend = frontend;
+    const breadcrumb = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:16px;font-size:13px;color:var(--text-2)">
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="closeFrontendDetail()">Frontends</button>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      <span style="color:var(--text)">${esc(frontend.name)}</span>
+    </div>`;
+    const metaCard = `<div class="card" style="margin-bottom:16px">
+      <div class="card-body" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:20px">
+        <div><div class="stat-label">Slug</div><div style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--text)">${esc(frontend.slug)}</div></div>
+        <div><div class="stat-label">Active Version</div><div style="margin-top:6px">${frontend.active_version_id ? '<span class="badge badge-green">active</span>' : '<span style="color:var(--text-3);font-size:13px">none</span>'}</div></div>
+        <div><div class="stat-label">Served At</div><div style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-2)">/frontends/${esc(frontend.slug)}/</div></div>
+        <div><div class="stat-label">Description</div><div style="margin-top:6px;color:var(--text-2);font-size:13px">${esc(frontend.description||'—')}</div></div>
+      </div>
+    </div>`;
+    const versionRows = !versions || versions.length === 0
+      ? `<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:24px">No versions yet. Upload a ZIP archive to deploy your frontend.</td></tr>`
+      : versions.map(v => `<tr>
+          <td><span class="badge badge-purple">${esc(v.label)}</span></td>
+          <td style="color:var(--text-2);font-size:11px;font-family:'JetBrains Mono',monospace">${esc(v.id)}</td>
+          <td style="color:var(--text-2)">${v.file_count} files</td>
+          <td>${v.id === frontend.active_version_id ? '<span class="badge badge-green">active</span>' : '<span style="color:var(--text-3);font-size:12px">—</span>'}</td>
+          <td style="display:flex;gap:6px">
+            ${v.id !== frontend.active_version_id ? `<button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px" onclick="activateFrontendVersion('${esc(frontend.id)}','${esc(v.id)}')">Activate</button>` : ''}
+            <button class="btn btn-danger btn-sm btn-icon" onclick="deleteFrontendVersion('${esc(frontend.id)}','${esc(v.id)}')" title="Delete">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            </button>
+          </td>
+        </tr>`).join('');
+    const cliCard = `<div class="card" style="margin-top:16px">
+      <div class="card-header"><span class="card-title">Deploy via CLI</span></div>
+      <div class="card-body">
+        <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+            <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">1 — Log in (once)</div>
+            <button class="cli-block" onclick="copySnippet(this,'flagbase auth login --server ${server}')" title="Click to copy">flagbase auth login --server ${server}</button>
+          </div>
+          <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+            <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">2 — Scaffold a local project</div>
+            <button class="cli-block" onclick="copySnippet(this,'flagbase fe init my-site --frontend-id ${esc(frontend.id)}')" title="Click to copy">flagbase fe init my-site --frontend-id ${esc(frontend.id)}</button>
+          </div>
+          <div style="padding:12px 16px">
+            <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">3 — Deploy a directory</div>
+            <button class="cli-block" onclick="copySnippet(this,'cd my-site\\nflagbase fe deploy --label v1')" title="Click to copy">cd my-site
+flagbase fe deploy --label v1</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    document.getElementById('content').innerHTML = breadcrumb + metaCard + `
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Versions</span><span class="badge badge-blue">${versions ? versions.length : 0}</span>
+          <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openUploadVersionModal('${esc(frontend.id)}','${esc(frontend.name)}')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Upload Version
+          </button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Label</th><th>ID</th><th>Files</th><th>Status</th><th></th></tr></thead>
+          <tbody>${versionRows}</tbody>
+        </table></div>
+      </div>` + cliCard;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+function openCreateFrontendModal() {
+  openModal('New Frontend', `
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input class="form-input" id="fe-name" placeholder="My Frontend">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Slug</label>
+        <input class="form-input" id="fe-slug" placeholder="my-frontend">
+        <span class="form-hint">Lowercase letters, numbers, and hyphens only. Determines the URL: <code>/frontends/&lt;slug&gt;/</code></span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description <span style="color:var(--text-3)">(optional)</span></label>
+        <input class="form-input" id="fe-desc" placeholder="Short description">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createFrontend()">Create Frontend</button>
+    </div>`);
+}
+
+async function createFrontend() {
+  const name = document.getElementById('fe-name').value.trim();
+  const slug = document.getElementById('fe-slug').value.trim();
+  const description = document.getElementById('fe-desc').value.trim();
+  if (!name || !slug) { toast('Name and slug are required', 'error'); return; }
+  try {
+    await POST('/api/v1/frontends/', {name, slug, description});
+    closeModal(); toast('Frontend created'); loadFrontends();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function openUploadVersionModal(frontendId, frontendName) {
+  openModal(`Upload Version — ${esc(frontendName)}`, `
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Label</label>
+        <input class="form-input" id="fv-label" placeholder="v1.0.0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description <span style="color:var(--text-3)">(optional)</span></label>
+        <input class="form-input" id="fv-desc" placeholder="What changed in this version">
+      </div>
+      <div class="form-group">
+        <label class="form-label">ZIP Archive</label>
+        <input class="form-input" type="file" id="fv-file" accept=".zip">
+        <span class="form-hint">Upload a ZIP containing your static files. The root of the ZIP is served at <code>/frontends/${esc(frontendId)}/</code>.</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="fv-upload-btn" onclick="uploadFrontendVersion('${esc(frontendId)}')">Upload</button>
+    </div>`);
+}
+
+async function uploadFrontendVersion(frontendId) {
+  const label = document.getElementById('fv-label').value.trim();
+  const description = document.getElementById('fv-desc').value.trim();
+  const fileInput = document.getElementById('fv-file');
+  const btn = document.getElementById('fv-upload-btn');
+  if (!label) { toast('Label is required', 'error'); return; }
+  if (!fileInput.files || fileInput.files.length === 0) { toast('ZIP file is required', 'error'); return; }
+  btn.disabled = true; btn.textContent = 'Uploading…';
+  try {
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    fd.append('label', label);
+    fd.append('description', description);
+    const resp = await fetch(`/api/v1/frontends/${frontendId}/versions`, {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + S.token},
+      body: fd,
+    });
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error(d.error || 'Upload failed (' + resp.status + ')');
+    }
+    closeModal(); toast('Version uploaded');
+    if (currentFrontend) loadFrontendDetail(currentFrontend);
+    else loadFrontends();
+  } catch(e) {
+    toast(e.message, 'error');
+    btn.disabled = false; btn.textContent = 'Upload';
+  }
+}
+
+async function activateFrontendVersion(frontendId, versionId) {
+  try {
+    await PUT(`/api/v1/frontends/${frontendId}/versions/${versionId}/activate`);
+    toast('Version activated');
+    if (currentFrontend) loadFrontendDetail(currentFrontend);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteFrontendVersion(frontendId, versionId) {
+  if (!confirm('Delete this version? This cannot be undone.')) return;
+  try {
+    await DEL(`/api/v1/frontends/${frontendId}/versions/${versionId}`);
+    toast('Version deleted');
+    if (currentFrontend) loadFrontendDetail(currentFrontend);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteFrontend(id, name) {
+  if (!confirm(`Delete frontend "${name}" and all its versions? This cannot be undone.`)) return;
+  try {
+    await DEL(`/api/v1/frontends/${id}`);
+    toast('Frontend deleted');
+    currentFrontend = null;
+    loadFrontends();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ═══════════════════════ UTILS ════════════════════════════════
