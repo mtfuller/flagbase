@@ -187,9 +187,14 @@ echo "Built function.wasm ($(wc -c < function.wasm) bytes)"
 	fmt.Printf("Scaffolded function project in ./%s\n\n", dir)
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  cd %s\n", dir)
-	fmt.Printf("  # edit main.go\n")
-	fmt.Printf("  flagbase fn build    # compile to function.wasm\n")
-	fmt.Printf("  flagbase fn deploy   # upload to %s\n", server)
+	fmt.Printf("  # edit main.go, then:\n")
+	fmt.Printf("  flagbase fn build              # compile to function.wasm\n")
+	fmt.Printf("  flagbase fn deploy --token <token>  # upload to %s\n\n", server)
+	fmt.Printf("Get a token:\n")
+	fmt.Printf("  curl -s -X POST %s/auth/login \\\n", server)
+	fmt.Printf("       -H 'Content-Type: application/json' \\\n")
+	fmt.Printf("       -d '{\"email\":\"you@example.com\",\"password\":\"secret\"}' | jq -r .token\n")
+	fmt.Printf("\n  # or open %s in your browser, log in, then click Deploy guide → Copy my token\n", server)
 	return nil
 }
 
@@ -413,9 +418,9 @@ func runFnPull(_ *cobra.Command, args []string) error {
 	fmt.Printf("Scaffold downloaded to ./%s\n\n", dir)
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  cd %s\n", dir)
-	fmt.Printf("  # edit main.go\n")
-	fmt.Printf("  flagbase fn build    # compile to function.wasm\n")
-	fmt.Printf("  flagbase fn deploy   # upload updated WASM\n")
+	fmt.Printf("  # edit main.go, then:\n")
+	fmt.Printf("  flagbase fn build              # compile to function.wasm\n")
+	fmt.Printf("  flagbase fn deploy --token <token>  # upload updated WASM\n")
 	return nil
 }
 
