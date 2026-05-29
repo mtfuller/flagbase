@@ -79,7 +79,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 
 	fnEngine := function.NewEngine(context.Background())
 	defer fnEngine.Close(context.Background())
-	fnStore := function.NewStore(db, store, fnEngine)
+	fnStore := function.NewStore(db, store, fnEngine, featureEng)
 
 	frontendSvc := frontend.NewService(db, store)
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/mtfuller/flagbase/internal/compiler"
+	"github.com/mtfuller/flagbase/internal/feature"
 	"github.com/mtfuller/flagbase/internal/storage"
 )
 
@@ -37,10 +38,11 @@ type Store struct {
 	db     *sql.DB
 	store  *storage.LocalAdapter
 	engine *Engine
+	flags  *feature.Engine
 }
 
-func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine) *Store {
-	return &Store{db: db, store: store, engine: engine}
+func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine, flags *feature.Engine) *Store {
+	return &Store{db: db, store: store, engine: engine, flags: flags}
 }
 
 // Create persists a new JavaScript function record and validates it synchronously.
@@ -210,7 +212,12 @@ func (s *Store) invokeWASM(ctx context.Context, fn *Function, timeout time.Durat
 	if err != nil {
 		return nil, fmt.Errorf("reading wasm bytes: %w", err)
 	}
-	return s.engine.InvokeWASI(ctx, wasmBytes, timeout)
+	deps := &HostDeps{
+		Storage: s.store,
+		Flags:   s.flags,
+		Store:   s,
+	}
+	return s.engine.InvokeWASI(ctx, wasmBytes, timeout, deps)
 }
 
 func (s *Store) invokeJS(fn *Function, timeout time.Duration) ([]byte, error) {
