@@ -201,6 +201,17 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 	return len(p), err
 }
 
+// ListFunctionInvocations returns the invocation history for a function.
+func (h *FunctionHandlers) ListFunctionInvocations(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	invocations, err := h.Functions.ListInvocations(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, invocations)
+}
+
 // ListFunctionVersions returns the deployment version history for a function.
 func (h *FunctionHandlers) ListFunctionVersions(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

@@ -145,9 +145,13 @@ func (e *Engine) invokeWASIWith(ctx context.Context, wasmBytes []byte, timeout t
 		WithStderr(io.Discard).
 		WithSysNanosleep().
 		WithSysNanotime().
-		WithSysWalltime()
+		WithSysWalltime().
+		WithName(fmt.Sprintf("fn-%d", time.Now().UnixNano()))
 
-	_, err = e.runtime.InstantiateModule(execCtx, compiled, cfg)
+	mod, err := e.runtime.InstantiateModule(execCtx, compiled, cfg)
+	if mod != nil {
+		defer mod.Close(ctx)
+	}
 	// WASI programs signal clean exit via proc_exit(0), which wazero surfaces
 	// as a *sys.ExitError with ExitCode() == 0. Treat that as success.
 	if err != nil {

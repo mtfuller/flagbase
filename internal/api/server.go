@@ -109,6 +109,7 @@ func NewServer(
 		r.Post("/functions/{id}/invoke", fh.InvokeFunction)
 		r.Get("/functions/{id}/invoke/stream", fh.InvokeFunctionStream)
 		r.Get("/functions/{id}/versions", fh.ListFunctionVersions)
+		r.Get("/functions/{id}/invocations", fh.ListFunctionInvocations)
 		r.Post("/functions/{id}/versions", fh.DeployFunctionVersion)
 		r.Get("/functions/{id}/scaffold", fh.GetFunctionScaffold)
 	})
