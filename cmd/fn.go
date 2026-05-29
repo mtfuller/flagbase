@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/mtfuller/flagbase/internal/scaffold"
 
 	"github.com/spf13/cobra"
 )
@@ -83,13 +86,23 @@ function ID. After editing main.go, run 'flagbase fn build' then
 	RunE: runFnPull,
 }
 
+var fnRunCmd = &cobra.Command{
+	Use:   "run [dir]",
+	Short: "Build, deploy, and invoke a function in one step",
+	Long: `Compile the function to WASM, upload it to the server, invoke it, and
+stream the output to stdout. Equivalent to running fn build + fn deploy +
+fn invoke in sequence. Useful for rapid iteration.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runFnRun,
+}
+
 func init() {
 	fnCmd.PersistentFlags().StringVar(&fnServer, "server", "",
 		"Flagbase server URL (overrides FLAGBASE_SERVER; default http://localhost:8080)")
 	fnCmd.PersistentFlags().StringVar(&fnToken, "token", "",
 		"Auth token (overrides FLAGBASE_TOKEN env)")
 
-	fnCmd.AddCommand(fnInitCmd, fnBuildCmd, fnDeployCmd, fnPullCmd)
+	fnCmd.AddCommand(fnInitCmd, fnBuildCmd, fnDeployCmd, fnPullCmd, fnRunCmd)
 	rootCmd.AddCommand(fnCmd)
 }
 
@@ -146,44 +159,40 @@ func writeProjectConfig(dir string, cfg *fnProjectConfig) error {
 func runFnInit(_ *cobra.Command, args []string) error {
 	name := args[0]
 	dir := name
+	safeName := scaffold.SafeName(name)
 
 	if _, err := os.Stat(dir); err == nil {
 		return fmt.Errorf("directory %q already exists", dir)
 	}
-
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "fnruntime"), 0o755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
 
 	server := effectiveServer()
 
-	files := map[string]struct {
-		content string
-		mode    os.FileMode
-	}{
-		"main.go": {content: fmt.Sprintf(`package main
+	type entry struct {
+		data []byte
+		mode os.FileMode
+	}
+	files := map[string]entry{
+		"main.go":      {scaffold.MainGo(name, safeName), 0o644},
+		"main_test.go": {scaffold.TestMainGo(safeName), 0o644},
+		"go.mod":       {scaffold.GoMod(name), 0o644},
+		"build.sh":     {[]byte(scaffold.BuildSh), 0o755},
 
-import "fmt"
-
-// main is the entry point for your Flagbase function.
-// Write to stdout — the output is captured and returned to the caller.
-func main() {
-	fmt.Println("Hello from %s!")
-}
-`, name), mode: 0o644},
-
-		"go.mod": {content: fmt.Sprintf("module flagbase-fn-%s\n\ngo 1.21\n",
-			sanitizeName(name)), mode: 0o644},
-
-		"build.sh": {content: `#!/bin/sh
-set -e
-GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go build -o function.wasm .
-echo "Built function.wasm ($(wc -c < function.wasm) bytes)"
-`, mode: 0o755},
+		"fnruntime/doc.go":            {[]byte(scaffold.FnruntimeDocGo), 0o644},
+		"fnruntime/runtime_wasip1.go": {[]byte(scaffold.FnruntimeRuntimeWasip1Go), 0o644},
+		"fnruntime/bucket_wasip1.go":  {[]byte(scaffold.FnruntimeBucketWasip1Go), 0o644},
+		"fnruntime/flags_wasip1.go":   {[]byte(scaffold.FnruntimeFlagsWasip1Go), 0o644},
+		"fnruntime/invoke_wasip1.go":  {[]byte(scaffold.FnruntimeInvokeWasip1Go), 0o644},
+		"fnruntime/fetch_wasip1.go":   {[]byte(scaffold.FnruntimeFetchWasip1Go), 0o644},
+		"fnruntime/table_wasip1.go":   {[]byte(scaffold.FnruntimeTableWasip1Go), 0o644},
+		"fnruntime/host.go":           {[]byte(scaffold.FnruntimeHostGo), 0o644},
+		"fnruntime/mock.go":           {[]byte(scaffold.FnruntimeMockGo), 0o644},
 	}
 
 	for fname, f := range files {
-		if err := os.WriteFile(filepath.Join(dir, fname), []byte(f.content), f.mode); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, fname), f.data, f.mode); err != nil {
 			return fmt.Errorf("writing %s: %w", fname, err)
 		}
 	}
@@ -197,9 +206,8 @@ echo "Built function.wasm ($(wc -c < function.wasm) bytes)"
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  flagbase auth login            # log in once and save your token\n")
 	fmt.Printf("  cd %s\n", dir)
-	fmt.Printf("  # edit main.go, then:\n")
-	fmt.Printf("  flagbase fn build              # compile to function.wasm\n")
-	fmt.Printf("  flagbase fn deploy             # upload to %s\n", server)
+	fmt.Printf("  go test ./...                  # run unit tests (no server needed)\n")
+	fmt.Printf("  flagbase fn run                # build, deploy, and invoke on %s\n", server)
 	return nil
 }
 
@@ -478,16 +486,93 @@ func runFnPull(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-// ---------- util ----------
+// ---------- run ----------
 
-func sanitizeName(name string) string {
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
+func runFnRun(cmd *cobra.Command, args []string) error {
+	dir := "."
+	if len(args) > 0 {
+		dir = args[0]
+	}
+
+	// build
+	if err := runFnBuild(cmd, []string{dir}); err != nil {
+		return err
+	}
+
+	// deploy (creates or updates, stores function_id in .flagbase.json)
+	if err := runFnDeploy(cmd, []string{dir}); err != nil {
+		return err
+	}
+
+	// read config to get the function ID written by deploy
+	cfg, err := readProjectConfig(dir)
+	if err != nil {
+		return err
+	}
+	if cfg.FunctionID == "" {
+		return fmt.Errorf("deploy did not record a function_id in .flagbase.json")
+	}
+
+	server := effectiveServer()
+	if cfg.Server != "" {
+		server = strings.TrimRight(cfg.Server, "/")
+	}
+	token := effectiveToken()
+	if token == "" {
+		return fmt.Errorf("auth token required: run 'flagbase auth login' or set --token / FLAGBASE_TOKEN")
+	}
+
+	fmt.Printf("Invoking %s ...\n", cfg.FunctionID)
+	return streamInvoke(server, token, cfg.FunctionID)
+}
+
+// streamInvoke connects to the SSE invoke/stream endpoint and writes stdout
+// chunks to os.Stdout as they arrive.
+func streamInvoke(server, token, id string) error {
+	req, err := http.NewRequest(http.MethodGet,
+		server+"/admin/api/functions/"+id+"/invoke/stream", nil)
+	if err != nil {
+		return fmt.Errorf("building request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("invoking function: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+
+	// Parse SSE: each event is "data: <json>\n\n"
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
 		}
-		if r >= 'A' && r <= 'Z' {
-			return r + 32
+		payload := strings.TrimPrefix(line, "data: ")
+
+		var event struct {
+			Type    string `json:"type"`
+			Data    string `json:"data"`
+			Message string `json:"message"`
 		}
-		return '-'
-	}, name)
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+		switch event.Type {
+		case "stdout":
+			fmt.Print(event.Data)
+		case "done":
+			return nil
+		case "error":
+			return fmt.Errorf("function error: %s", event.Message)
+		}
+	}
+	return scanner.Err()
 }
