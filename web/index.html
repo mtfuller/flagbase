@@ -154,8 +154,9 @@ td.text-primary{color:var(--text)}
 .badge-purple{background:rgba(99,102,241,.1);color:var(--primary)}
 .badge::before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor}
 
-/* ── Code editor textarea ───────────────────────────────────── */
-.fn-editor{font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.7;min-height:260px;resize:vertical;color:#a5b4fc;tab-size:2}
+/* ── CLI code blocks ────────────────────────────────────────── */
+.cli-block{display:block;background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:12px;font-family:'JetBrains Mono',monospace;color:#a5b4fc;white-space:pre;cursor:pointer;transition:border-color .15s;width:100%;text-align:left}
+.cli-block:hover{border-color:var(--border-focus)}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── Empty state ────────────────────────────────────────────── */
@@ -1176,32 +1177,96 @@ async function confirmDeleteUser(id) {
 }
 
 // ═══════════════════════ FUNCTIONS ════════════════════════════
-const fnTemplates = {
-  go: `package main
 
-import "fmt"
+function fnDeployGuideHTML() {
+  const server = window.location.origin;
+  return `
+    <div class="modal-body" style="padding-bottom:8px">
+      <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
+        <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px">Quick start</div>
+        <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">1 — Install the CLI</div>
+          <button class="cli-block" onclick="copySnippet(this,'go install github.com/mtfuller/flagbase@latest')" title="Click to copy">go install github.com/mtfuller/flagbase@latest</button>
+        </div>
+        <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">2 — Scaffold a new function</div>
+          <button class="cli-block" onclick="copySnippet(this,'flagbase fn init my-function')" title="Click to copy">flagbase fn init my-function</button>
+        </div>
+        <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">3 — Build and deploy</div>
+          <button class="cli-block" onclick="copySnippet(this,'cd my-function\\nflagbase fn build\\nFLAGBASE_SERVER=${server} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy')" title="Click to copy">cd my-function
+flagbase fn build
+FLAGBASE_SERVER=${server} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy</button>
+        </div>
+        <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <span style="font-size:12px;color:var(--text-3)">Replace <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">&lt;token&gt;</code> with your auth token.</span>
+          <button class="btn btn-ghost btn-sm" onclick="copyToken()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            Copy my token
+          </button>
+        </div>
+      </div>
+      <p style="font-size:12px;color:var(--text-3);margin-top:12px">
+        To deploy an existing function by ID: <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">flagbase fn pull &lt;id&gt;</code>
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+    </div>`;
+}
 
-func main() {
-\tfmt.Println("Hello from Go WASM!")
-}`,
-  javascript: `// Call handle() to produce output via console.log
-function handle() {
-  console.log("Hello from JavaScript!");
-}`
-};
+function showDeployGuide() {
+  openModal('Deploy a Function', fnDeployGuideHTML(), false);
+}
+
+function copySnippet(el, text) {
+  const decoded = text.replace(/\\n/g, '\n');
+  navigator.clipboard.writeText(decoded).then(() => toast('Copied to clipboard'));
+}
+
+function copyToken() {
+  if (!S.token) { toast('No active session token', 'error'); return; }
+  navigator.clipboard.writeText(S.token).then(() => toast('Token copied to clipboard'));
+}
 
 async function loadFunctions() {
-  setActions(`<button class="btn btn-primary btn-sm" onclick="openFnModal()">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New Function
+  setActions(`<button class="btn btn-ghost btn-sm" onclick="showDeployGuide()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+    Deploy guide
   </button>`);
   try {
     const fns = await GET('/admin/api/functions');
     if (!fns || fns.length === 0) {
       document.getElementById('content').innerHTML = `<div class="empty-state">
         <div class="empty-icon">⚡</div>
-        <div class="empty-title">No functions yet</div>
-        <div class="empty-text">Write Go or JavaScript code in the browser and deploy it to the sandboxed Wazero runtime.</div>
+        <div class="empty-title">No functions deployed yet</div>
+        <div class="empty-text">Use the Flagbase CLI to scaffold, build, and deploy Go functions as sandboxed WASM.</div>
+        <div style="text-align:left;max-width:580px;margin:24px auto 0">
+          <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
+            <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px">Quick start</div>
+            <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">1 — Install the CLI</div>
+              <button class="cli-block" onclick="copySnippet(this,'go install github.com/mtfuller/flagbase@latest')" title="Click to copy">go install github.com/mtfuller/flagbase@latest</button>
+            </div>
+            <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">2 — Scaffold a new function</div>
+              <button class="cli-block" onclick="copySnippet(this,'flagbase fn init my-function')" title="Click to copy">flagbase fn init my-function</button>
+            </div>
+            <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+              <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">3 — Build and deploy</div>
+              <button class="cli-block" onclick="copySnippet(this,'cd my-function\\nflagbase fn build\\nFLAGBASE_SERVER=${window.location.origin} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy')" title="Click to copy">cd my-function
+flagbase fn build
+FLAGBASE_SERVER=${window.location.origin} FLAGBASE_TOKEN=&lt;token&gt; flagbase fn deploy</button>
+            </div>
+            <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+              <span style="font-size:12px;color:var(--text-3)">Replace <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px">&lt;token&gt;</code> with your auth token.</span>
+              <button class="btn btn-ghost btn-sm" onclick="copyToken()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                Copy my token
+              </button>
+            </div>
+          </div>
+        </div>
       </div>`;
       return;
     }
@@ -1247,82 +1312,6 @@ function fnStatusBadge(status, errMsg) {
   if (status === 'compiling') return `<span class="badge badge-yellow">compiling…</span>`;
   if (status === 'error') return `<span class="badge badge-red" title="${esc(errMsg||'')}">error</span>`;
   return `<span class="badge">${esc(status)}</span>`;
-}
-
-function openFnModal(lang) {
-  lang = lang || 'go';
-  openModal('New Function', `
-    <div class="modal-body">
-      <div class="form-row form-row-2" style="margin-bottom:12px">
-        <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">Name</label>
-          <input class="form-input" id="fn-name" placeholder="my-function" required>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">Language</label>
-          <select class="form-input form-select" id="fn-lang" onchange="onFnLangChange(this.value)">
-            <option value="go" ${lang==='go'?'selected':''}>Go (compiles to WASM)</option>
-            <option value="javascript" ${lang==='javascript'?'selected':''}>JavaScript (goja interpreter)</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-group" style="margin-bottom:12px">
-        <label class="form-label">Description <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
-        <input class="form-input" id="fn-desc" placeholder="What does this function do?">
-      </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">Source Code</label>
-        <textarea class="form-input fn-editor" id="fn-src" spellcheck="false" autocomplete="off" autocorrect="off">${esc(fnTemplates[lang])}</textarea>
-        <div class="form-hint" id="fn-lang-hint">${fnLangHint(lang)}</div>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="createFn()">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-        Compile &amp; Deploy
-      </button>
-    </div>`, true);
-}
-
-function fnLangHint(lang) {
-  if (lang === 'go') return 'Write a complete Go program. Output to <code style="background:rgba(255,255,255,.08);padding:1px 4px;border-radius:3px">stdout</code> (fmt.Println) is captured on invocation.';
-  return 'Export a <code style="background:rgba(255,255,255,.08);padding:1px 4px;border-radius:3px">handle()</code> function. Use <code style="background:rgba(255,255,255,.08);padding:1px 4px;border-radius:3px">console.log()</code> to produce output.';
-}
-
-function onFnLangChange(lang) {
-  const cur = document.getElementById('fn-src').value;
-  const isDefault = Object.values(fnTemplates).some(t => t === cur.trim() || cur.trim() === '');
-  if (isDefault) document.getElementById('fn-src').value = fnTemplates[lang];
-  document.getElementById('fn-lang-hint').innerHTML = fnLangHint(lang);
-}
-
-async function createFn() {
-  const name = document.getElementById('fn-name').value.trim();
-  const lang = document.getElementById('fn-lang').value;
-  const desc = document.getElementById('fn-desc').value.trim();
-  const src  = document.getElementById('fn-src').value;
-  if (!name || !src) { toast('Name and source are required', 'error'); return; }
-
-  const btn = document.querySelector('#modal-box .btn-primary');
-  const origHTML = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin .8s linear infinite"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg> Compiling…`;
-
-  try {
-    const fn = await POST('/admin/api/functions', {name, description: desc, language: lang, source: src});
-    closeModal();
-    if (fn.status === 'ready') {
-      toast(`"${fn.name}" compiled and deployed`);
-    } else {
-      toast(`Compilation failed: ${fn.error}`, 'error');
-    }
-    loadFunctions();
-  } catch(err) {
-    toast(err.message, 'error');
-    btn.disabled = false;
-    btn.innerHTML = origHTML;
-  }
 }
 
 async function invokeFn(id, name) {
