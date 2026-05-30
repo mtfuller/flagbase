@@ -207,10 +207,26 @@ td.text-primary{color:var(--text)}
 /* ── Divider ────────────────────────────────────────────────── */
 .divider{height:1px;background:var(--border);margin:20px 0}
 
+/* ── Tabs ───────────────────────────────────────────────────── */
+.tab-bar{display:flex;border-bottom:1px solid var(--border);margin:-4px 0 20px;gap:0}
+.tab-btn{padding:10px 16px;font-size:12px;font-weight:500;color:var(--text-3);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:all .15s;letter-spacing:.2px;text-transform:uppercase}
+.tab-btn.active{color:var(--primary);border-bottom-color:var(--primary)}
+.tab-btn:hover:not(.active){color:var(--text-2)}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ── Override / Variant item rows ───────────────────────────── */
+.ov-row{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px}
+.ov-add-row{display:grid;gap:8px;margin-top:12px}
+.isolation-bar{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:16px}
+.isolation-bar-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.4px}
+.isolation-fields{display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:center}
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media(max-width:768px){
   .stats-grid{grid-template-columns:1fr 1fr}
   .sidebar{width:200px}
+  .isolation-fields{grid-template-columns:1fr 1fr}
 }
 </style>
 </head>
@@ -432,6 +448,10 @@ function enabledBadge(v) {
 function boolBadge(v) {
   return v ? '<span class="badge badge-blue">true</span>' : '<span class="badge" style="background:rgba(255,255,255,.05);color:var(--text-3)">false</span>';
 }
+function statusBadge(s) {
+  const map = {draft:'badge-yellow', testing:'badge-blue', ga:'badge-green', deprecated:'badge-red'};
+  return `<span class="badge ${map[s]||'badge-yellow'}">${esc(s||'draft')}</span>`;
+}
 
 // ═══════════════════════ ROUTER ══════════════════════════════
 const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', users:'Users', functions:'Functions', tables:'Tables', frontends:'Frontends'};
@@ -610,6 +630,7 @@ async function loadDashboard() {
 
 // ═══════════════════════ FLAGS ════════════════════════════════
 let flagRules = [];
+let currentEditFlag = null; // flag currently open in the edit modal
 
 async function loadFlags() {
   setActions(`<button class="btn btn-primary btn-sm" onclick="openFlagModal()">
@@ -630,7 +651,7 @@ async function loadFlags() {
     document.getElementById('content').innerHTML = `<div class="card">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Key</th><th>Name</th><th>Status</th><th>Default</th><th>Rules</th><th>Created</th><th></th></tr></thead>
+          <thead><tr><th>Key</th><th>Name</th><th>Lifecycle</th><th>Enabled</th><th>Rules</th><th>Overrides</th><th>Updated</th><th></th></tr></thead>
           <tbody id="flags-tbody"></tbody>
         </table>
       </div>
@@ -638,10 +659,11 @@ async function loadFlags() {
     document.getElementById('flags-tbody').innerHTML = flags.map(f => `<tr>
       <td class="text-mono">${esc(f.key)}</td>
       <td class="text-primary">${esc(f.name)}</td>
+      <td>${statusBadge(f.status)}</td>
       <td>${enabledBadge(f.enabled)}</td>
-      <td>${boolBadge(f.default_value)}</td>
-      <td><span class="badge badge-blue">${(f.rules||[]).length} rule${(f.rules||[]).length !== 1 ? 's' : ''}</span></td>
-      <td>${fmtDate(f.created_at)}</td>
+      <td><span class="badge badge-blue">${(f.rules||[]).length} rule${(f.rules||[]).length!==1?'s':''}</span></td>
+      <td>${(f.overrides||[]).length > 0 ? `<span class="badge badge-purple">${(f.overrides||[]).length} override${(f.overrides||[]).length!==1?'s':''}</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
+      <td>${fmtDate(f.updated_at||f.created_at)}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-ghost btn-sm btn-icon" onclick='editFlag(${JSON.stringify(f)})' title="Edit">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -657,57 +679,102 @@ async function loadFlags() {
 }
 
 function openFlagModal(flag) {
+  currentEditFlag = flag || null;
   flagRules = flag ? (flag.rules || []).map(r => ({...r})) : [];
   const isEdit = !!flag;
   openModal(isEdit ? 'Edit Flag' : 'Create Feature Flag', flagModalHTML(flag), true);
   renderRules();
+  renderVariants();
+  renderOverrides();
+  switchTab('settings');
 }
 
 function editFlag(flag) { openFlagModal(flag); }
 
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+}
+
 function flagModalHTML(f) {
   const v = k => f ? esc(f[k] || '') : '';
+  const s = f ? (f.status || 'draft') : 'draft';
+  const statuses = ['draft','testing','ga','deprecated'];
+  const statusDescriptions = {
+    draft: 'Dev testing only — only explicit overrides can access this flag',
+    testing: 'Controlled rollout — overrides + rules work, everyone else gets false',
+    ga: 'Full production — overrides, rules, then default value',
+    deprecated: 'Sunset — always returns default value, remove gating code'
+  };
   return `
     <div class="modal-body">
-      <div class="form-row form-row-2">
-        <div class="form-group">
-          <label class="form-label">Key</label>
-          <input class="form-input" id="f-key" type="text" placeholder="my-feature-flag" value="${v('key')}" ${f ? 'disabled' : ''} required>
-          <div class="form-hint">Unique identifier. Cannot be changed after creation.</div>
+      <div class="tab-bar">
+        <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">Settings</button>
+        <button class="tab-btn" data-tab="rules" onclick="switchTab('rules')">Rules</button>
+        <button class="tab-btn" data-tab="variants" onclick="switchTab('variants')">Variants</button>
+        <button class="tab-btn" data-tab="overrides" onclick="switchTab('overrides')">Overrides</button>
+      </div>
+
+      <div id="tab-settings" class="tab-panel">
+        <div class="form-row form-row-2">
+          <div class="form-group">
+            <label class="form-label">Key</label>
+            <input class="form-input" id="f-key" type="text" placeholder="my-feature-flag" value="${v('key')}" ${f ? 'disabled' : ''} required>
+            <div class="form-hint">Unique identifier. Cannot be changed after creation.</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Name</label>
+            <input class="form-input" id="f-name" type="text" placeholder="My Feature Flag" value="${v('name')}" required>
+          </div>
         </div>
         <div class="form-group">
-          <label class="form-label">Name</label>
-          <input class="form-input" id="f-name" type="text" placeholder="My Feature Flag" value="${v('name')}" required>
+          <label class="form-label">Description</label>
+          <input class="form-input" id="f-desc" type="text" placeholder="What does this flag control?" value="${v('description')}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Lifecycle Status</label>
+          <select class="form-input form-select" id="f-status">
+            ${statuses.map(st => `<option value="${st}" ${s===st?'selected':''}>${st}</option>`).join('')}
+          </select>
+          <div class="form-hint" id="f-status-hint">${statusDescriptions[s]}</div>
+        </div>
+        <div class="form-row form-row-2">
+          <div class="toggle-wrap">
+            <label class="toggle">
+              <input type="checkbox" id="f-enabled" ${f && f.enabled ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Enabled</span>
+          </div>
+          <div class="toggle-wrap">
+            <label class="toggle">
+              <input type="checkbox" id="f-default" ${f && f.default_value ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Default Value</span>
+          </div>
         </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">Description</label>
-        <input class="form-input" id="f-desc" type="text" placeholder="What does this flag control?" value="${v('description')}">
-      </div>
-      <div class="form-row form-row-2" style="margin-bottom:20px">
-        <div class="toggle-wrap">
-          <label class="toggle">
-            <input type="checkbox" id="f-enabled" ${f && f.enabled ? 'checked' : ''}>
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-label">Enabled</span>
+
+      <div id="tab-rules" class="tab-panel">
+        <div class="rules-header">
+          <span class="rules-label">Targeting Rules</span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="addRule()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Rule
+          </button>
         </div>
-        <div class="toggle-wrap">
-          <label class="toggle">
-            <input type="checkbox" id="f-default" ${f && f.default_value ? 'checked' : ''}>
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-label">Default Value</span>
-        </div>
+        <div id="rules-container"></div>
+        <div class="form-hint" style="margin-top:8px">Rules are evaluated in priority order (lowest first). First match wins. <strong>Overrides always take precedence over rules.</strong></div>
       </div>
-      <div class="rules-header">
-        <span class="rules-label">Rules</span>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="addRule()">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Add Rule
-        </button>
+
+      <div id="tab-variants" class="tab-panel">
+        <div id="variants-container"></div>
       </div>
-      <div id="rules-container"></div>
+
+      <div id="tab-overrides" class="tab-panel">
+        <div id="overrides-container"></div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -716,6 +783,20 @@ function flagModalHTML(f) {
       </button>
     </div>`;
 }
+
+// Update the status hint text live when the select changes.
+document.addEventListener('change', e => {
+  if (e.target.id === 'f-status') {
+    const hints = {
+      draft: 'Dev testing only — only explicit overrides can access this flag',
+      testing: 'Controlled rollout — overrides + rules work, everyone else gets false',
+      ga: 'Full production — overrides, rules, then default value',
+      deprecated: 'Sunset — always returns default value, remove gating code'
+    };
+    const hint = document.getElementById('f-status-hint');
+    if (hint) hint.textContent = hints[e.target.value] || '';
+  }
+});
 
 function renderRules() {
   const c = document.getElementById('rules-container');
@@ -754,6 +835,121 @@ function addRule() {
 
 function removeRule(i) { flagRules.splice(i, 1); renderRules(); }
 
+// ── Variants ─────────────────────────────────────────────────
+
+function renderVariants() {
+  const c = document.getElementById('variants-container');
+  if (!c) return;
+  if (!currentEditFlag) {
+    c.innerHTML = '<div class="rules-empty">Save the flag first, then come back to add A/B variants.</div>';
+    return;
+  }
+  const flagKey = currentEditFlag.key;
+  const variants = currentEditFlag.variants || [];
+  let html = '';
+  if (variants.length === 0) {
+    html += '<div class="rules-empty" style="margin-bottom:12px">No named variants yet. Add variants to enable A/B testing — each variant becomes a named bucket users can be routed to.</div>';
+  } else {
+    html += variants.map(v => `
+      <div class="ov-row">
+        <span class="badge badge-purple">${esc(v.key)}</span>
+        <span style="color:var(--text-3);font-size:12px;flex:1">weight: ${v.weight}</span>
+        <button class="btn btn-danger btn-sm" onclick="deleteVariant('${esc(flagKey)}','${esc(v.key)}')">Remove</button>
+      </div>`).join('');
+  }
+  html += `
+    <div class="ov-add-row" style="grid-template-columns:1fr 90px auto;margin-top:${variants.length?'12px':'0'}">
+      <input class="form-input" id="new-variant-key" placeholder='Key, e.g. "control" or "treatment"'>
+      <input class="form-input" id="new-variant-weight" type="number" value="0" min="0" placeholder="Weight">
+      <button class="btn btn-ghost btn-sm" onclick="addVariant('${esc(flagKey)}')">Add</button>
+    </div>
+    <div class="form-hint" style="margin-top:6px">Weight is used for future percentage-based allocation. Rules can reference variant keys via the <code>variant_key</code> field.</div>`;
+  c.innerHTML = html;
+}
+
+async function addVariant(flagKey) {
+  const key = document.getElementById('new-variant-key').value.trim();
+  if (!key) { toast('Variant key is required', 'error'); return; }
+  const weight = parseInt(document.getElementById('new-variant-weight').value) || 0;
+  try {
+    await POST(`/api/v1/flags/${flagKey}/variants`, {key, weight});
+    currentEditFlag = await GET(`/api/v1/flags/${flagKey}`);
+    renderVariants(); renderOverrides();
+    toast('Variant added');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function deleteVariant(flagKey, variantKey) {
+  try {
+    await DEL(`/api/v1/flags/${flagKey}/variants/${encodeURIComponent(variantKey)}`);
+    currentEditFlag = await GET(`/api/v1/flags/${flagKey}`);
+    renderVariants(); renderOverrides();
+    toast('Variant removed');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+// ── Overrides ────────────────────────────────────────────────
+
+function renderOverrides() {
+  const c = document.getElementById('overrides-container');
+  if (!c) return;
+  if (!currentEditFlag) {
+    c.innerHTML = '<div class="rules-empty">Save the flag first, then come back to pin developer users to specific variants.</div>';
+    return;
+  }
+  const flagKey = currentEditFlag.key;
+  const overrides = currentEditFlag.overrides || [];
+  const namedVariants = (currentEditFlag.variants || []).map(v => v.key);
+  const variantOptions = ['true', 'false', ...namedVariants];
+
+  let html = '';
+  if (overrides.length === 0) {
+    html += '<div class="rules-empty" style="margin-bottom:12px">No per-user overrides. Pin a developer\'s user ID to a variant so they can test the flag while it\'s in <strong>draft</strong> or <strong>testing</strong> status.</div>';
+  } else {
+    html += overrides.map(ov => {
+      const badgeCls = ov.variant_key === 'false' ? 'badge-red' : ov.variant_key === 'true' ? 'badge-green' : 'badge-purple';
+      return `
+        <div class="ov-row">
+          <code style="font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-2)">${esc(ov.user_id)}</code>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;color:var(--text-3)"><polyline points="9 18 15 12 9 6"/></svg>
+          <span class="badge ${badgeCls}">${esc(ov.variant_key)}</span>
+          <button class="btn btn-danger btn-sm" onclick="deleteOverride('${esc(flagKey)}','${esc(ov.user_id)}')">Remove</button>
+        </div>`;
+    }).join('');
+  }
+  html += `
+    <div class="ov-add-row" style="grid-template-columns:1fr auto auto;margin-top:${overrides.length?'12px':'0'}">
+      <input class="form-input" id="new-override-user" placeholder="User ID">
+      <select class="form-input form-select" id="new-override-variant">
+        ${variantOptions.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+      </select>
+      <button class="btn btn-ghost btn-sm" onclick="addOverride('${esc(flagKey)}')">Add</button>
+    </div>
+    <div class="form-hint" style="margin-top:6px">Overrides bypass all rules. While the flag is in <strong>draft</strong>, overrides are the <em>only</em> way to access it.</div>`;
+  c.innerHTML = html;
+}
+
+async function addOverride(flagKey) {
+  const userId = document.getElementById('new-override-user').value.trim();
+  const variantKey = document.getElementById('new-override-variant').value;
+  if (!userId) { toast('User ID is required', 'error'); return; }
+  try {
+    await POST(`/api/v1/flags/${flagKey}/overrides`, {user_id: userId, variant_key: variantKey});
+    currentEditFlag = await GET(`/api/v1/flags/${flagKey}`);
+    renderOverrides();
+    toast('Override added');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function deleteOverride(flagKey, userId) {
+  try {
+    await DEL(`/api/v1/flags/${flagKey}/overrides/${encodeURIComponent(userId)}`);
+    currentEditFlag = await GET(`/api/v1/flags/${flagKey}`);
+    renderOverrides();
+    toast('Override removed');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
 async function createFlag() {
   const key = document.getElementById('f-key').value.trim();
   const name = document.getElementById('f-name').value.trim();
@@ -764,6 +960,7 @@ async function createFlag() {
       description: document.getElementById('f-desc').value.trim(),
       enabled: document.getElementById('f-enabled').checked,
       default_value: document.getElementById('f-default').checked,
+      status: document.getElementById('f-status').value || 'draft',
       rules: flagRules,
     });
     closeModal(); toast('Flag created'); loadFlags();
@@ -779,6 +976,7 @@ async function saveFlag(key) {
       description: document.getElementById('f-desc').value.trim(),
       enabled: document.getElementById('f-enabled').checked,
       default_value: document.getElementById('f-default').checked,
+      status: document.getElementById('f-status').value || 'ga',
       rules: flagRules,
     });
     closeModal(); toast('Flag updated'); loadFlags();
@@ -1715,10 +1913,17 @@ async function loadTableDetail(key) {
       ${def.name !== key ? `<span style="color:var(--text-3)">— ${esc(def.name)}</span>` : ''}
     </div>`;
 
-    const sysRows = ['_id','_created_at','_updated_at'].map(n => `<tr>
-      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-3)">${n}</td>
-      <td><span class="badge" style="background:rgba(255,255,255,.05);color:var(--text-3)">${n==='_id'?'text':'datetime'}</span></td>
-      <td style="color:var(--text-3)">—</td><td style="color:var(--text-3)">—</td>
+    const sysColDefs = [
+      {name:'_id',       type:'text',     note:'Primary key'},
+      {name:'_created_at',type:'datetime',note:'Set on insert'},
+      {name:'_updated_at',type:'datetime',note:'Updated on mutation'},
+      {name:'_flag_ctx', type:'text',     note:'Flag context tag for data isolation (flagKey:variantKey)'},
+    ];
+    const sysRows = sysColDefs.map(c => `<tr>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-3)">${c.name}</td>
+      <td><span class="badge" style="background:rgba(255,255,255,.05);color:var(--text-3)">${c.type}</span></td>
+      <td style="color:var(--text-3)">—</td>
+      <td style="color:var(--text-3);font-size:12px">${c.note}</td>
     </tr>`).join('');
     const colRows = cols.map(c => `<tr>
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${esc(c.name)}</td>
@@ -1740,6 +1945,27 @@ async function loadTableDetail(key) {
         <tbody>${sysRows}${colRows || '<tr><td colspan="4" style="text-align:center;color:var(--text-3);padding:16px">No user columns yet — add one above.</td></tr>'}</tbody>
       </table></div>
     </div>`;
+
+    const isolationPanel = `
+      <div class="isolation-bar">
+        <div class="isolation-bar-head">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Data Isolation — Flag Context
+        </div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">Records written by feature-flagged code carry a <code>_flag_ctx</code> tag. Roll them back to undo, or promote them to make them permanent production records.</div>
+        <div class="isolation-fields">
+          <input class="form-input" id="iso-flag-key" placeholder="Flag key, e.g. checkout-v2">
+          <input class="form-input" id="iso-variant-key" placeholder="Variant, e.g. treatment">
+          <button class="btn btn-ghost btn-sm" onclick="promoteRecords('${esc(key)}')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 11 12 6 7 11"/><line x1="12" y1="18" x2="12" y2="6"/></svg>
+            Promote to Production
+          </button>
+          <button class="btn btn-danger btn-sm" onclick="rollbackRecords('${esc(key)}')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>
+            Rollback
+          </button>
+        </div>
+      </div>`;
 
     let recordsCard;
     if (cols.length === 0) {
@@ -1784,10 +2010,44 @@ async function loadTableDetail(key) {
       </div>`;
     }
 
-    document.getElementById('content').innerHTML = breadcrumb + schemaCard + recordsCard;
+    document.getElementById('content').innerHTML = breadcrumb + schemaCard + isolationPanel + recordsCard;
   } catch(err) {
     document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
   }
+}
+
+async function rollbackRecords(tableKey) {
+  const flagKey = document.getElementById('iso-flag-key').value.trim();
+  const variantKey = document.getElementById('iso-variant-key').value.trim();
+  if (!flagKey || !variantKey) { toast('Flag key and variant key are required', 'error'); return; }
+  openModal('Confirm Rollback', `
+    <div class="modal-body">
+      <p style="color:var(--text-2)">This will <strong style="color:var(--danger)">permanently delete</strong> all records in <code style="color:var(--text)">${esc(tableKey)}</code> that were created under flag context <code style="color:var(--warning)">${esc(flagKey)}:${esc(variantKey)}</code>. This cannot be undone.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmRollback('${esc(tableKey)}','${esc(flagKey)}','${esc(variantKey)}')">Delete Records</button>
+    </div>`);
+}
+
+async function confirmRollback(tableKey, flagKey, variantKey) {
+  try {
+    const res = await req('DELETE', `/api/v1/tables/${tableKey}/rollback?flag_key=${encodeURIComponent(flagKey)}&variant_key=${encodeURIComponent(variantKey)}`);
+    closeModal();
+    toast(`Rolled back ${res.deleted} record${res.deleted!==1?'s':''} (${res.flag_ctx})`);
+    loadTableDetail(tableKey);
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function promoteRecords(tableKey) {
+  const flagKey = document.getElementById('iso-flag-key').value.trim();
+  const variantKey = document.getElementById('iso-variant-key').value.trim();
+  if (!flagKey || !variantKey) { toast('Flag key and variant key are required', 'error'); return; }
+  try {
+    const res = await POST(`/api/v1/tables/${tableKey}/promote?flag_key=${encodeURIComponent(flagKey)}&variant_key=${encodeURIComponent(variantKey)}`);
+    toast(`Promoted ${res.promoted} record${res.promoted!==1?'s':''} to production (${res.flag_ctx})`);
+    loadTableDetail(tableKey);
+  } catch(err) { toast(err.message, 'error'); }
 }
 
 // --- Table schema modals ---
