@@ -127,6 +127,7 @@ func (h *Handlers) DeleteFlag(w http.ResponseWriter, r *http.Request) {
 }
 
 // EvaluateFlag resolves the current value of a flag for the authenticated caller.
+// Response includes both the boolean value and the resolved variant key.
 func (h *Handlers) EvaluateFlag(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
@@ -139,7 +140,103 @@ func (h *Handlers) EvaluateFlag(w http.ResponseWriter, r *http.Request) {
 		evalCtx["role"] = claims.Role
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"value": h.Feature.EvaluateBool(key, evalCtx)})
+	variant := h.Feature.EvaluateVariant(key, evalCtx)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"value":   variant != "false" && variant != "",
+		"variant": variant,
+	})
+}
+
+// TransitionFlagStatus moves a flag through its lifecycle.
+func (h *Handlers) TransitionFlagStatus(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var req struct {
+		Status feature.FlagStatus `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.Feature.TransitionStatus(key, req.Status); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	f, _ := h.Feature.GetFlag(key)
+	writeJSON(w, http.StatusOK, f)
+}
+
+// --- Flag variants ---
+
+func (h *Handlers) ListFlagVariants(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	writeJSON(w, http.StatusOK, h.Feature.ListVariants(key))
+}
+
+func (h *Handlers) CreateFlagVariant(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var v feature.Variant
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if v.Key == "" {
+		writeError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	v.FlagKey = key
+	if err := h.Feature.CreateVariant(&v); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+func (h *Handlers) DeleteFlagVariant(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	variantKey := chi.URLParam(r, "variantKey")
+	if err := h.Feature.DeleteVariant(key, variantKey); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Flag overrides ---
+
+func (h *Handlers) ListFlagOverrides(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	writeJSON(w, http.StatusOK, h.Feature.ListOverrides(key))
+}
+
+// CreateFlagOverride pins a user to a variant, bypassing normal rule evaluation.
+// Send {"user_id": "...", "variant_key": "true|false|<named-variant>"}.
+func (h *Handlers) CreateFlagOverride(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var ov feature.Override
+	if err := json.NewDecoder(r.Body).Decode(&ov); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if ov.UserID == "" || ov.VariantKey == "" {
+		writeError(w, http.StatusBadRequest, "user_id and variant_key are required")
+		return
+	}
+	ov.FlagKey = key
+	if err := h.Feature.CreateOverride(&ov); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, ov)
+}
+
+func (h *Handlers) DeleteFlagOverride(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	userID := chi.URLParam(r, "userId")
+	if err := h.Feature.DeleteOverride(key, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Health returns a simple liveness probe.
