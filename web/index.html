@@ -2087,6 +2087,7 @@ async function loadFrontends() {
           <td>${f.active_version_id ? '<span class="badge badge-green">active</span>' : '<span class="badge" style="background:rgba(255,255,255,.05);color:var(--text-3)">none</span>'}</td>
           <td style="color:var(--text-2)">${fmtDate(f.created_at)}</td>
           <td style="display:flex;gap:6px">
+            ${f.active_version_id ? `<a href="/frontends/${esc(f.slug)}/" target="_blank" class="btn btn-ghost btn-sm btn-icon" title="Open served frontend"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : ''}
             <button class="btn btn-danger btn-sm btn-icon" onclick="deleteFrontend('${esc(f.id)}','${esc(f.name)}')" title="Delete">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
             </button>
@@ -2137,7 +2138,7 @@ async function loadFrontendDetail(f) {
       <div class="card-body" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:20px">
         <div><div class="stat-label">Slug</div><div style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--text)">${esc(frontend.slug)}</div></div>
         <div><div class="stat-label">Active Version</div><div style="margin-top:6px">${frontend.active_version_id ? '<span class="badge badge-green">active</span>' : '<span style="color:var(--text-3);font-size:13px">none</span>'}</div></div>
-        <div><div class="stat-label">Served At</div><div style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-2)">/frontends/${esc(frontend.slug)}/</div></div>
+        <div><div class="stat-label">Served At</div><div style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:12px">${frontend.active_version_id ? `<a href="/frontends/${esc(frontend.slug)}/" target="_blank" style="color:var(--accent);text-decoration:none" title="Open served frontend">/frontends/${esc(frontend.slug)}/ <svg style="vertical-align:middle" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : `<span style="color:var(--text-2)">/frontends/${esc(frontend.slug)}/</span>`}</div></div>
         <div><div class="stat-label">Description</div><div style="margin-top:6px;color:var(--text-2);font-size:13px">${esc(frontend.description||'—')}</div></div>
       </div>
     </div>`;
