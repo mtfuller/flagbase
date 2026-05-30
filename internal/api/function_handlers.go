@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mtfuller/flagbase/internal/function"
+	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/scaffold"
 )
 
@@ -126,15 +127,40 @@ func (h *FunctionHandlers) InvokeFunction(w http.ResponseWriter, r *http.Request
 	id := chi.URLParam(r, "id")
 
 	var req struct {
-		TimeoutSeconds int `json:"timeout_seconds"`
+		TimeoutSeconds int    `json:"timeout_seconds"`
+		FlagKey        string `json:"flag_key"`
+		VariantKey     string `json:"variant_key"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.TimeoutSeconds <= 0 || req.TimeoutSeconds > 30 {
 		req.TimeoutSeconds = 5
 	}
 
+	ctx := r.Context()
+
+	// Inject the caller's IAM identity so flag_eval, flag_eval_variant, and
+	// get_caller_context host calls can evaluate flags in the user's context.
+	if claims, ok := ctx.Value(iam.UserContextKey).(*iam.Claims); ok {
+		ctx = function.WithCallerContext(ctx, function.CallerContext{
+			UserID:   claims.UserID,
+			Role:     claims.Role,
+			TenantID: claims.TenantID,
+			Email:    claims.Email,
+			Groups:   claims.Groups,
+		})
+	}
+
+	// Optionally run under a specific flag context so table writes are isolated.
+	if req.FlagKey != "" {
+		variantKey := req.VariantKey
+		if variantKey == "" {
+			variantKey = "true"
+		}
+		ctx = function.WithFlagContext(ctx, req.FlagKey+":"+variantKey)
+	}
+
 	timeout := time.Duration(req.TimeoutSeconds) * time.Second
-	output, err := h.Functions.Invoke(r.Context(), id, timeout)
+	output, err := h.Functions.Invoke(ctx, id, timeout)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return

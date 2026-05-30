@@ -166,3 +166,42 @@ func (h *TableHandlers) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// RollbackRecords deletes all records tagged with a specific flag context.
+// Query params: flag_key (required), variant_key (required).
+// This undoes all data written by feature-flagged code running under that variant.
+func (h *TableHandlers) RollbackRecords(w http.ResponseWriter, r *http.Request) {
+	tableKey := chi.URLParam(r, "key")
+	flagKey := r.URL.Query().Get("flag_key")
+	variantKey := r.URL.Query().Get("variant_key")
+	if flagKey == "" || variantKey == "" {
+		writeError(w, http.StatusBadRequest, "flag_key and variant_key query params are required")
+		return
+	}
+	flagCtx := flagKey + ":" + variantKey
+	n, err := h.Tables.RollbackByFlagCtx(tableKey, flagCtx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": n, "flag_ctx": flagCtx})
+}
+
+// PromoteRecords clears the flag context tag from records, graduating them to production.
+// Query params: flag_key (required), variant_key (required).
+func (h *TableHandlers) PromoteRecords(w http.ResponseWriter, r *http.Request) {
+	tableKey := chi.URLParam(r, "key")
+	flagKey := r.URL.Query().Get("flag_key")
+	variantKey := r.URL.Query().Get("variant_key")
+	if flagKey == "" || variantKey == "" {
+		writeError(w, http.StatusBadRequest, "flag_key and variant_key query params are required")
+		return
+	}
+	flagCtx := flagKey + ":" + variantKey
+	n, err := h.Tables.PromoteByFlagCtx(tableKey, flagCtx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"promoted": n, "flag_ctx": flagCtx})
+}

@@ -16,6 +16,46 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
+// callerCtxKey is the context key for the IAM identity of the HTTP caller.
+type callerCtxKey struct{}
+
+// flagCtxKey is the context key for the active flag context string ("flagKey:variantKey").
+type flagCtxKey struct{}
+
+// CallerContext holds the identity of the user who triggered a function invocation.
+// It is injected by the HTTP handler and exposed to WASM via the get_caller_context host call.
+type CallerContext struct {
+	UserID   string   `json:"user_id"`
+	Role     string   `json:"role"`
+	TenantID string   `json:"tenant_id"`
+	Email    string   `json:"email"`
+	Groups   []string `json:"groups"`
+}
+
+// WithCallerContext injects a CallerContext into the execution context so that
+// host functions (flag_eval, flag_eval_variant, get_caller_context) can use it.
+func WithCallerContext(ctx context.Context, cc CallerContext) context.Context {
+	return context.WithValue(ctx, callerCtxKey{}, cc)
+}
+
+// WithFlagContext marks a function invocation as running under a specific flag
+// variant (format: "flagKey:variantKey").  table_put uses this to tag new records.
+func WithFlagContext(ctx context.Context, flagCtx string) context.Context {
+	return context.WithValue(ctx, flagCtxKey{}, flagCtx)
+}
+
+// callerEvalCtx builds the map[string]interface{} used by feature.Engine.EvaluateVariant
+// from a CallerContext stored in the invocation context.
+func callerEvalCtx(ctx context.Context) map[string]interface{} {
+	if cc, ok := ctx.Value(callerCtxKey{}).(CallerContext); ok {
+		return map[string]interface{}{
+			"userId": cc.UserID,
+			"role":   cc.Role,
+		}
+	}
+	return map[string]interface{}{}
+}
+
 // invStateKey is the context key for per-invocation state.
 type invStateKey struct{}
 
@@ -217,6 +257,8 @@ func registerHostModule(ctx context.Context, rt wazero.Runtime, deps HostDeps) e
 		Export("bucket_list")
 
 	// flag_eval(keyPtr, keyLen uint32) uint32
+	// Evaluates the flag using the caller's identity (injected via WithCallerContext).
+	// Returns 1 (true) or 0 (false). Returns errResult if flags unavailable.
 	b.NewFunctionBuilder().
 		WithParameterNames("keyPtr", "keyLen").
 		WithResultNames("result").
@@ -226,7 +268,7 @@ func registerHostModule(ctx context.Context, rt wazero.Runtime, deps HostDeps) e
 				stack[0] = uint64(errResult)
 				return
 			}
-			val := deps.Flags.EvaluateBool(key, map[string]interface{}{})
+			val := deps.Flags.EvaluateBool(key, callerEvalCtx(ctx))
 			if val {
 				stack[0] = 1
 			} else {
@@ -234,6 +276,52 @@ func registerHostModule(ctx context.Context, rt wazero.Runtime, deps HostDeps) e
 			}
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
 		Export("flag_eval")
+
+	// flag_eval_variant(keyPtr, keyLen uint32) uint32
+	// Like flag_eval but returns the variant key string (e.g. "true", "treatment") in the
+	// result buffer.  Useful for A/B testing where you need the named bucket, not just bool.
+	b.NewFunctionBuilder().
+		WithParameterNames("keyPtr", "keyLen").
+		WithResultNames("resultLen").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
+			key := readStr(m, uint32(stack[0]), uint32(stack[1]))
+			st := invStateFromCtx(ctx)
+			if deps.Flags == nil {
+				st.setError(fmt.Errorf("flag_eval_variant: flags not available"))
+				stack[0] = uint64(errResult)
+				return
+			}
+			variant := deps.Flags.EvaluateVariant(key, callerEvalCtx(ctx))
+			st.setResult([]byte(variant))
+			stack[0] = uint64(len(variant))
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("flag_eval_variant")
+
+	// get_caller_context(outPtr, outLen uint32) uint32
+	// Copies the JSON-encoded CallerContext into WASM memory.
+	// Returns 0 when no caller context is attached (e.g. background trigger).
+	b.NewFunctionBuilder().
+		WithParameterNames("outPtr", "outLen").
+		WithResultNames("written").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
+			outPtr := uint32(stack[0])
+			outLen := uint32(stack[1])
+			st := invStateFromCtx(ctx)
+			cc, ok := ctx.Value(callerCtxKey{}).(CallerContext)
+			if !ok {
+				stack[0] = 0
+				return
+			}
+			data, err := json.Marshal(cc)
+			if err != nil {
+				st.setError(fmt.Errorf("get_caller_context: marshal: %w", err))
+				stack[0] = 0
+				return
+			}
+			n := copy32(m, outPtr, outLen, data)
+			stack[0] = uint64(n)
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("get_caller_context")
 
 	// fn_invoke(idPtr, idLen uint32) uint32
 	b.NewFunctionBuilder().
@@ -402,7 +490,13 @@ func registerHostModule(ctx context.Context, rt wazero.Runtime, deps HostDeps) e
 				rec, opErr = deps.Tables.UpdateRecord(tableKey, existingID, payload)
 			} else {
 				delete(payload, "_id")
-				rec, opErr = deps.Tables.InsertRecord(tableKey, payload)
+				// Tag new records with the active flag context so they can be
+				// rolled back or promoted when the flag graduates.
+				if fc, ok := ctx.Value(flagCtxKey{}).(string); ok && fc != "" {
+					rec, opErr = deps.Tables.InsertRecordFlagged(tableKey, payload, fc)
+				} else {
+					rec, opErr = deps.Tables.InsertRecord(tableKey, payload)
+				}
 			}
 			if opErr != nil {
 				st.setError(fmt.Errorf("table_put: %w", opErr))

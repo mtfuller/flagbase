@@ -14,7 +14,7 @@ import (
 var keyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 
 // reservedColumns cannot be used as user-defined column names.
-var reservedColumns = map[string]bool{"_id": true, "_created_at": true, "_updated_at": true}
+var reservedColumns = map[string]bool{"_id": true, "_created_at": true, "_updated_at": true, "_flag_ctx": true}
 
 // ColumnType enumerates the supported SQLite-compatible column types.
 type ColumnType string
@@ -306,7 +306,7 @@ func buildCreateDDL(key string, cols []Column) string {
 	var sb strings.Builder
 	sb.WriteString("CREATE TABLE IF NOT EXISTS ")
 	sb.WriteString(sqlTableName(key)) // safe: keyPattern validated
-	sb.WriteString(" (_id TEXT PRIMARY KEY, _created_at DATETIME DEFAULT CURRENT_TIMESTAMP, _updated_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+	sb.WriteString(" (_id TEXT PRIMARY KEY, _created_at DATETIME DEFAULT CURRENT_TIMESTAMP, _updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, _flag_ctx TEXT")
 	for _, c := range cols {
 		sb.WriteString(", ")
 		sb.WriteString(colFragment(c))

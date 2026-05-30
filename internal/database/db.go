@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -21,10 +22,29 @@ func Connect(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate applies the embedded schema to the database.
+// Migrate applies the embedded schema and any additive column migrations.
 func Migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	return migrateAdditive(db)
+}
+
+// migrateAdditive runs ALTER TABLE statements that are safe to re-run; duplicate-column
+// errors are silently ignored so the function is idempotent.
+func migrateAdditive(db *sql.DB) error {
+	stmts := []string{
+		`ALTER TABLE feature_flags ADD COLUMN status TEXT NOT NULL DEFAULT 'ga'`,
+		`ALTER TABLE flag_rules    ADD COLUMN variant_key TEXT`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 const schema = `
@@ -145,6 +165,25 @@ CREATE TABLE IF NOT EXISTS table_columns (
 );
 
 CREATE INDEX IF NOT EXISTS idx_table_columns_table ON table_columns(table_key);
+
+CREATE TABLE IF NOT EXISTS flag_variants (
+    id         TEXT PRIMARY KEY,
+    flag_key   TEXT NOT NULL REFERENCES feature_flags(key) ON DELETE CASCADE,
+    key        TEXT NOT NULL,
+    weight     INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(flag_key, key)
+);
+CREATE INDEX IF NOT EXISTS idx_flag_variants_flag ON flag_variants(flag_key);
+
+CREATE TABLE IF NOT EXISTS flag_overrides (
+    id          TEXT PRIMARY KEY,
+    flag_key    TEXT NOT NULL REFERENCES feature_flags(key) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
+    variant_key TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(flag_key, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_flag_overrides_flag ON flag_overrides(flag_key);
 
 CREATE TABLE IF NOT EXISTS function_triggers (
     id          TEXT PRIMARY KEY,

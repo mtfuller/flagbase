@@ -58,6 +58,85 @@ func (e *Engine) InsertRecord(tableKey string, data map[string]interface{}) (*Re
 	return rec, err
 }
 
+// InsertRecordFlagged inserts a new row tagged with a flag context string
+// (format: "flagKey:variantKey", e.g. "checkout-v2:treatment").
+// The tag is stored in the hidden _flag_ctx column so it can later be rolled
+// back or promoted without touching production records.
+func (e *Engine) InsertRecordFlagged(tableKey string, data map[string]interface{}, flagCtx string) (*Record, error) {
+	def, err := e.GetTable(tableKey)
+	if err != nil {
+		return nil, err
+	}
+	if def == nil {
+		return nil, fmt.Errorf("table %q not found", tableKey)
+	}
+
+	colNames, colVals, err := buildInsertData(def.Columns, data)
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := newID()
+	if err != nil {
+		return nil, fmt.Errorf("generating record id: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO ")
+	sb.WriteString(sqlTableName(tableKey))
+	sb.WriteString(" (_id, _flag_ctx")
+	for _, n := range colNames {
+		sb.WriteString(", ")
+		sb.WriteString(n)
+	}
+	sb.WriteString(") VALUES (?, ?")
+	for range colNames {
+		sb.WriteString(", ?")
+	}
+	sb.WriteString(")")
+
+	args := make([]interface{}, 0, 2+len(colVals))
+	args = append(args, id, flagCtx)
+	args = append(args, colVals...)
+	if _, err := e.db.Exec(sb.String(), args...); err != nil {
+		return nil, fmt.Errorf("inserting flagged record: %w", err)
+	}
+
+	return e.GetRecord(tableKey, id)
+}
+
+// RollbackByFlagCtx deletes all records whose _flag_ctx equals the supplied
+// flag context string, returning the number of rows deleted.  This is
+// equivalent to undoing all writes made under a specific flag variant.
+func (e *Engine) RollbackByFlagCtx(tableKey, flagCtx string) (int64, error) {
+	if err := validateKey(tableKey); err != nil {
+		return 0, err
+	}
+	res, err := e.db.Exec(
+		"DELETE FROM "+sqlTableName(tableKey)+" WHERE _flag_ctx = ?", flagCtx,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("rollback: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// PromoteByFlagCtx clears the _flag_ctx tag on all matching records, making
+// them indistinguishable from production records.  Call this when a flag
+// variant is graduating to GA and its data should become permanent.
+func (e *Engine) PromoteByFlagCtx(tableKey, flagCtx string) (int64, error) {
+	if err := validateKey(tableKey); err != nil {
+		return 0, err
+	}
+	res, err := e.db.Exec(
+		"UPDATE "+sqlTableName(tableKey)+" SET _flag_ctx = NULL WHERE _flag_ctx = ?", flagCtx,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("promote: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // GetRecord fetches a single row by _id, returning nil if not found.
 func (e *Engine) GetRecord(tableKey, id string) (*Record, error) {
 	def, err := e.GetTable(tableKey)

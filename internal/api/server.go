@@ -86,6 +86,18 @@ func NewServer(
 		r.Put("/flags/{key}", h.UpdateFlag)
 		r.Delete("/flags/{key}", h.DeleteFlag)
 		r.Get("/flags/{key}/evaluate", h.EvaluateFlag)
+		r.Put("/flags/{key}/status", h.TransitionFlagStatus)
+
+		// Named variants (A/B testing buckets)
+		r.Get("/flags/{key}/variants", h.ListFlagVariants)
+		r.Post("/flags/{key}/variants", h.CreateFlagVariant)
+		r.Delete("/flags/{key}/variants/{variantKey}", h.DeleteFlagVariant)
+
+		// Per-user overrides (dev testing in production)
+		r.Get("/flags/{key}/overrides", h.ListFlagOverrides)
+		r.Post("/flags/{key}/overrides", h.CreateFlagOverride)
+		r.Delete("/flags/{key}/overrides/{userId}", h.DeleteFlagOverride)
+
 		r.Post("/metrics", h.RecordMetric)
 		r.Get("/gateway/routes", h.ListGatewayRoutes)
 		r.With(RequireRole("admin")).Post("/gateway/routes", h.RegisterGatewayRoute)
@@ -165,6 +177,9 @@ func NewServer(
 		r.Get("/{key}/records/{id}", th.GetRecord)
 		r.Put("/{key}/records/{id}", th.UpdateRecord)
 		r.Delete("/{key}/records/{id}", th.DeleteRecord)
+		// Flag-context lifecycle operations
+		r.Delete("/{key}/rollback", th.RollbackRecords)
+		r.Post("/{key}/promote", th.PromoteRecords)
 	})
 
 	// Gateway — dynamic reverse proxy
