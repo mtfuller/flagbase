@@ -223,20 +223,15 @@ func (s *Service) CreateVersion(ctx context.Context, frontendID, label, descript
 		return nil, fmt.Errorf("zip archive contains no files")
 	}
 
-	id, err := newID()
-	if err != nil {
-		return nil, fmt.Errorf("generating id: %w", err)
-	}
-
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO frontend_versions (id, frontend_id, label, description, file_count)
 		VALUES (?, ?, ?, ?, ?)`,
-		id, frontendID, label, description, fileCount)
+		versionID, frontendID, label, description, fileCount)
 	if err != nil {
 		return nil, fmt.Errorf("inserting version: %w", err)
 	}
 
-	return s.GetVersion(ctx, id)
+	return s.GetVersion(ctx, versionID)
 }
 
 // ActivateVersion sets the active version for a frontend.
