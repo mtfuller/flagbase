@@ -16,6 +16,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/feature"
 	"github.com/mtfuller/flagbase/internal/storage"
 	"github.com/mtfuller/flagbase/internal/table"
+	"github.com/mtfuller/flagbase/internal/tracing"
 )
 
 const functionsBucket = "functions"
@@ -53,13 +54,26 @@ type FunctionVersion struct {
 
 // FunctionInvocation records a single execution of a function.
 type FunctionInvocation struct {
-	ID          string     `json:"id"`
-	FunctionID  string     `json:"function_id"`
-	StartedAt   time.Time  `json:"started_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Success     bool       `json:"success"`
-	Output      string     `json:"output,omitempty"`
-	Error       string     `json:"error,omitempty"`
+	ID              string     `json:"id"`
+	FunctionID      string     `json:"function_id"`
+	StartedAt       time.Time  `json:"started_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	Success         bool       `json:"success"`
+	Output          string     `json:"output,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	ExecutionMs     *int64     `json:"execution_ms,omitempty"`
+	PeakMemoryBytes int64      `json:"peak_memory_bytes"`
+	HostCalls       int        `json:"host_calls"`
+	OutputSizeBytes int        `json:"output_size_bytes"`
+	TraceID         string     `json:"trace_id,omitempty"`
+}
+
+// invMetrics holds compute metrics captured during a function invocation.
+type invMetrics struct {
+	executionMs     int64
+	peakMemoryBytes uint32
+	hostCalls       int
+	outputSizeBytes int
 }
 
 // Store manages function lifecycle: persistence, compilation, and invocation.
@@ -69,6 +83,7 @@ type Store struct {
 	engine *Engine
 	flags  *feature.Engine
 	tables *table.Engine
+	tracer *tracing.Recorder
 }
 
 func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine, flags *feature.Engine) *Store {
@@ -76,9 +91,10 @@ func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine, flags *fe
 }
 
 // WithTables injects the table engine so WASM functions can call table host functions.
-func (s *Store) WithTables(t *table.Engine) {
-	s.tables = t
-}
+func (s *Store) WithTables(t *table.Engine) { s.tables = t }
+
+// WithTracer injects the distributed tracing recorder.
+func (s *Store) WithTracer(t *tracing.Recorder) { s.tracer = t }
 
 // Create persists a new JavaScript function record and validates it synchronously.
 // For Go/WASM functions, use Upload instead.
@@ -227,14 +243,16 @@ func (s *Store) InvokeStream(ctx context.Context, id string, timeout time.Durati
 		return fmt.Errorf("function is not ready (status: %s)", fn.Status)
 	}
 
-	invID, _ := s.startInvocation(ctx, id)
+	invID, _ := s.startInvocation(ctx, fn.ID)
 	var capBuf bytes.Buffer
 	mw := io.MultiWriter(w, &capBuf)
 
+	start := time.Now()
+	var m WASIMetrics
 	var invokeErr error
 	switch compiler.Runtime(fn.Runtime) {
 	case compiler.RuntimeWASM:
-		invokeErr = s.invokeWASMStream(ctx, fn, timeout, mw)
+		invokeErr = s.invokeWASMStream(ctx, fn, invID, timeout, mw, &m)
 	case compiler.RuntimeJS:
 		var out []byte
 		out, invokeErr = s.invokeJS(fn, timeout)
@@ -246,15 +264,21 @@ func (s *Store) InvokeStream(ctx context.Context, id string, timeout time.Durati
 		invokeErr = fmt.Errorf("unknown runtime: %s", fn.Runtime)
 	}
 
+	im := invMetrics{
+		executionMs:     time.Since(start).Milliseconds(),
+		peakMemoryBytes: m.PeakMemoryBytes,
+		hostCalls:       m.HostCalls,
+		outputSizeBytes: capBuf.Len(),
+	}
 	errMsg := ""
 	if invokeErr != nil {
 		errMsg = invokeErr.Error()
 	}
-	_ = s.completeInvocation(ctx, invID, capBuf.String(), errMsg)
+	_ = s.completeInvocation(ctx, invID, capBuf.String(), errMsg, im)
 	return invokeErr
 }
 
-func (s *Store) invokeWASMStream(ctx context.Context, fn *Function, timeout time.Duration, w io.Writer) error {
+func (s *Store) invokeWASMStream(ctx context.Context, fn *Function, invID string, timeout time.Duration, w io.Writer, m *WASIMetrics) error {
 	rc, err := s.store.GetObject(ctx, functionsBucket, fn.ID+".wasm")
 	if err != nil {
 		return fmt.Errorf("loading wasm artifact: %w", err)
@@ -264,13 +288,8 @@ func (s *Store) invokeWASMStream(ctx context.Context, fn *Function, timeout time
 	if err != nil {
 		return fmt.Errorf("reading wasm bytes: %w", err)
 	}
-	deps := &HostDeps{
-		Storage: s.store,
-		Flags:   s.flags,
-		Store:   s,
-		Tables:  s.tables,
-	}
-	return s.engine.InvokeWASIStream(ctx, wasmBytes, timeout, deps, w)
+	deps := s.buildHostDeps(ctx, fn.ID, invID)
+	return s.engine.InvokeWASIStream(ctx, wasmBytes, timeout, deps, w, m)
 }
 
 // List returns all functions ordered by creation date descending.
@@ -336,51 +355,103 @@ func (s *Store) Invoke(ctx context.Context, id string, timeout time.Duration) ([
 		return nil, fmt.Errorf("function is not ready (status: %s)", fn.Status)
 	}
 
-	invID, _ := s.startInvocation(ctx, id)
+	invID, _ := s.startInvocation(ctx, fn.ID)
 
+	start := time.Now()
+	var m WASIMetrics
 	var output []byte
 	var invokeErr error
 	switch compiler.Runtime(fn.Runtime) {
 	case compiler.RuntimeWASM:
-		output, invokeErr = s.invokeWASM(ctx, fn, timeout)
+		output, invokeErr = s.invokeWASM(ctx, fn, invID, timeout, &m)
 	case compiler.RuntimeJS:
 		output, invokeErr = s.invokeJS(fn, timeout)
 	default:
 		invokeErr = fmt.Errorf("unknown runtime: %s", fn.Runtime)
 	}
 
+	im := invMetrics{
+		executionMs:     time.Since(start).Milliseconds(),
+		peakMemoryBytes: m.PeakMemoryBytes,
+		hostCalls:       m.HostCalls,
+		outputSizeBytes: len(output),
+	}
 	errMsg := ""
 	if invokeErr != nil {
 		errMsg = invokeErr.Error()
 	}
-	_ = s.completeInvocation(ctx, invID, string(output), errMsg)
+	_ = s.completeInvocation(ctx, invID, string(output), errMsg, im)
 	return output, invokeErr
 }
 
-// startInvocation inserts a pending invocation record and returns its ID.
+// startInvocation inserts a pending invocation record, creates a linked trace,
+// and returns the invocation ID.
 func (s *Store) startInvocation(ctx context.Context, fnID string) (string, error) {
 	id, err := newID()
 	if err != nil {
 		return "", err
 	}
+	traceID := tracing.TraceIDFromCtx(ctx)
+	// Create a trace record when one is tracked so trace_events can reference it.
+	if traceID != "" && s.tracer != nil {
+		_, _ = s.tracer.StartTrace(ctx, traceID, "http_invoke", fnID, "", "")
+	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO function_invocations (id, function_id) VALUES (?, ?)`, id, fnID)
+		`INSERT INTO function_invocations (id, function_id, trace_id) VALUES (?, ?, ?)`,
+		id, fnID, traceID)
 	return id, err
 }
 
-// completeInvocation updates the invocation record with outcome information.
-func (s *Store) completeInvocation(ctx context.Context, invID, output, errMsg string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE function_invocations SET completed_at = CURRENT_TIMESTAMP, success = ?, output = ?, error = ? WHERE id = ?`,
-		errMsg == "", output, errMsg, invID)
+// completeInvocation updates the invocation record with outcome and compute metrics.
+func (s *Store) completeInvocation(ctx context.Context, invID, output, errMsg string, m invMetrics) error {
+	success := errMsg == ""
+	// Record the function_invoke span in the trace.
+	if m.executionMs > 0 && s.tracer != nil {
+		traceID := tracing.TraceIDFromCtx(ctx)
+		if traceID != "" {
+			status := "success"
+			if !success {
+				status = "error"
+			}
+			_, _ = s.tracer.RecordSpan(
+				traceID, "", "function_invoke", status,
+				time.Now().Add(-time.Duration(m.executionMs)*time.Millisecond),
+				m.executionMs, 0,
+				map[string]interface{}{
+					"invocation_id":    invID,
+					"host_calls":       m.hostCalls,
+					"peak_memory_bytes": m.peakMemoryBytes,
+					"output_size_bytes": m.outputSizeBytes,
+				},
+			)
+			s.tracer.CompleteTrace(traceID, status)
+		}
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE function_invocations
+		SET completed_at      = CURRENT_TIMESTAMP,
+		    success           = ?,
+		    output            = ?,
+		    error             = ?,
+		    execution_ms      = ?,
+		    peak_memory_bytes = ?,
+		    host_calls        = ?,
+		    output_size_bytes = ?
+		WHERE id = ?`,
+		success, output, errMsg,
+		m.executionMs, m.peakMemoryBytes, m.hostCalls, m.outputSizeBytes,
+		invID)
 	return err
 }
 
 // ListInvocations returns the 100 most recent invocations for a function.
 func (s *Store) ListInvocations(ctx context.Context, fnID string) ([]FunctionInvocation, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, function_id, started_at, completed_at, success, output, error
-		 FROM function_invocations WHERE function_id = ? ORDER BY started_at DESC LIMIT 100`, fnID)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, function_id, started_at, completed_at, success, output, error,
+		       execution_ms, peak_memory_bytes, host_calls, output_size_bytes, trace_id
+		FROM function_invocations
+		WHERE function_id = ?
+		ORDER BY started_at DESC LIMIT 100`, fnID)
 	if err != nil {
 		return nil, err
 	}
@@ -390,8 +461,12 @@ func (s *Store) ListInvocations(ctx context.Context, fnID string) ([]FunctionInv
 		var inv FunctionInvocation
 		var completedAt sql.NullTime
 		var errText string
-		if err := rows.Scan(&inv.ID, &inv.FunctionID, &inv.StartedAt, &completedAt,
-			&inv.Success, &inv.Output, &errText); err != nil {
+		var execMs sql.NullInt64
+		if err := rows.Scan(
+			&inv.ID, &inv.FunctionID, &inv.StartedAt, &completedAt,
+			&inv.Success, &inv.Output, &errText,
+			&execMs, &inv.PeakMemoryBytes, &inv.HostCalls, &inv.OutputSizeBytes, &inv.TraceID,
+		); err != nil {
 			return nil, err
 		}
 		if completedAt.Valid {
@@ -399,6 +474,9 @@ func (s *Store) ListInvocations(ctx context.Context, fnID string) ([]FunctionInv
 		}
 		if errText != "" {
 			inv.Error = errText
+		}
+		if execMs.Valid {
+			inv.ExecutionMs = &execMs.Int64
 		}
 		invs = append(invs, inv)
 	}
@@ -408,7 +486,7 @@ func (s *Store) ListInvocations(ctx context.Context, fnID string) ([]FunctionInv
 	return invs, nil
 }
 
-func (s *Store) invokeWASM(ctx context.Context, fn *Function, timeout time.Duration) ([]byte, error) {
+func (s *Store) invokeWASM(ctx context.Context, fn *Function, invID string, timeout time.Duration, m *WASIMetrics) ([]byte, error) {
 	rc, err := s.store.GetObject(ctx, functionsBucket, fn.ID+".wasm")
 	if err != nil {
 		return nil, fmt.Errorf("loading wasm artifact: %w", err)
@@ -418,13 +496,24 @@ func (s *Store) invokeWASM(ctx context.Context, fn *Function, timeout time.Durat
 	if err != nil {
 		return nil, fmt.Errorf("reading wasm bytes: %w", err)
 	}
-	deps := &HostDeps{
+	deps := s.buildHostDeps(ctx, fn.ID, invID)
+	return s.engine.InvokeWASI(ctx, wasmBytes, timeout, deps, m)
+}
+
+// buildHostDeps constructs the HostDeps for a function invocation, wiring all
+// available services including the tracer and compute-metric callbacks.
+func (s *Store) buildHostDeps(ctx context.Context, fnID, invID string) *HostDeps {
+	return &HostDeps{
 		Storage: s.store,
 		Flags:   s.flags,
 		Store:   s,
 		Tables:  s.tables,
+		Tracer:  s.tracer,
+		DB:      s.db,
+		FnID:    fnID,
+		InvID:   invID,
+		TraceID: tracing.TraceIDFromCtx(ctx),
 	}
-	return s.engine.InvokeWASI(ctx, wasmBytes, timeout, deps)
 }
 
 func (s *Store) invokeJS(fn *Function, timeout time.Duration) ([]byte, error) {

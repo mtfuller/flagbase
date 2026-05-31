@@ -62,6 +62,8 @@ type Backend interface {
 	PutRecord(tableKey string, record map[string]interface{}) (*Record, error)
 	DeleteRecord(tableKey, id string) error
 	QueryRecords(tableKey string, opts QueryOptions) ([]*Record, error)
+	PublishMetric(name string, value float64, tags map[string]string) bool
+	GetTraceID() string
 }
 
 var activeBackend Backend
@@ -95,3 +97,7 @@ func DeleteRecord(tableKey, id string) error { return require().DeleteRecord(tab
 func QueryRecords(tableKey string, opts QueryOptions) ([]*Record, error) {
 	return require().QueryRecords(tableKey, opts)
 }
+func PublishMetric(name string, value float64, tags map[string]string) bool {
+	return require().PublishMetric(name, value, tags)
+}
+func GetTraceID() string { return require().GetTraceID() }

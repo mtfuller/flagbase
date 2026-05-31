@@ -34,8 +34,13 @@ func Migrate(db *sql.DB) error {
 // errors are silently ignored so the function is idempotent.
 func migrateAdditive(db *sql.DB) error {
 	stmts := []string{
-		`ALTER TABLE feature_flags ADD COLUMN status TEXT NOT NULL DEFAULT 'ga'`,
-		`ALTER TABLE flag_rules    ADD COLUMN variant_key TEXT`,
+		`ALTER TABLE feature_flags      ADD COLUMN status TEXT NOT NULL DEFAULT 'ga'`,
+		`ALTER TABLE flag_rules         ADD COLUMN variant_key TEXT`,
+		`ALTER TABLE function_invocations ADD COLUMN execution_ms INTEGER`,
+		`ALTER TABLE function_invocations ADD COLUMN peak_memory_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE function_invocations ADD COLUMN host_calls INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE function_invocations ADD COLUMN output_size_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE function_invocations ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -184,6 +189,58 @@ CREATE TABLE IF NOT EXISTS flag_overrides (
     UNIQUE(flag_key, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_flag_overrides_flag ON flag_overrides(flag_key);
+
+CREATE TABLE IF NOT EXISTS traces (
+    id           TEXT PRIMARY KEY,
+    root_type    TEXT NOT NULL DEFAULT '',
+    root_ref     TEXT NOT NULL DEFAULT '',
+    user_id      TEXT NOT NULL DEFAULT '',
+    tenant_id    TEXT NOT NULL DEFAULT '',
+    started_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME,
+    status       TEXT NOT NULL DEFAULT 'running'
+);
+CREATE INDEX IF NOT EXISTS idx_traces_status  ON traces(status);
+CREATE INDEX IF NOT EXISTS idx_traces_started ON traces(started_at);
+
+CREATE TABLE IF NOT EXISTS trace_events (
+    id              TEXT PRIMARY KEY,
+    trace_id        TEXT NOT NULL REFERENCES traces(id) ON DELETE CASCADE,
+    parent_event_id TEXT,
+    event_type      TEXT NOT NULL,
+    sequence        INTEGER NOT NULL DEFAULT 0,
+    started_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at    DATETIME,
+    duration_ms     INTEGER,
+    status          TEXT NOT NULL DEFAULT 'success',
+    metadata        TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_trace_events_trace ON trace_events(trace_id);
+
+CREATE TABLE IF NOT EXISTS function_custom_metrics (
+    id            TEXT PRIMARY KEY,
+    trace_id      TEXT NOT NULL DEFAULT '',
+    function_id   TEXT NOT NULL REFERENCES functions(id) ON DELETE CASCADE,
+    invocation_id TEXT NOT NULL DEFAULT '',
+    metric_name   TEXT NOT NULL,
+    metric_value  REAL NOT NULL DEFAULT 0,
+    tags          TEXT NOT NULL DEFAULT '{}',
+    recorded_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fn_custom_metrics_fn   ON function_custom_metrics(function_id);
+CREATE INDEX IF NOT EXISTS idx_fn_custom_metrics_name ON function_custom_metrics(metric_name);
+
+CREATE TABLE IF NOT EXISTS anomaly_events (
+    id            TEXT PRIMARY KEY,
+    anomaly_type  TEXT NOT NULL,
+    ref_id        TEXT NOT NULL,
+    severity      TEXT NOT NULL DEFAULT 'warning',
+    message       TEXT NOT NULL,
+    detected_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at   DATETIME,
+    auto_resolved INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_anomaly_events_ref ON anomaly_events(ref_id);
 
 CREATE TABLE IF NOT EXISTS function_triggers (
     id          TEXT PRIMARY KEY,

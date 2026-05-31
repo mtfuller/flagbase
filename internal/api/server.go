@@ -19,6 +19,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/storage"
 	"github.com/mtfuller/flagbase/internal/table"
+	"github.com/mtfuller/flagbase/internal/tracing"
 	"github.com/mtfuller/flagbase/internal/trigger"
 	"github.com/mtfuller/flagbase/web"
 )
@@ -45,6 +46,7 @@ func NewServer(
 	frontendSvc *frontend.Service,
 	tableEng *table.Engine,
 	triggerEng *trigger.Engine,
+	tracer *tracing.Recorder,
 ) *Server {
 	gw := gateway.NewProxyHandler(featureEng)
 	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
@@ -53,6 +55,8 @@ func NewServer(
 	ffh := &FrontendHandlers{Frontends: frontendSvc}
 	th := &TableHandlers{Tables: tableEng}
 	trh := &TriggerHandlers{Triggers: triggerEng}
+	mh := &MonitoringHandlers{DB: db}
+	_ = tracer
 
 	adminHTML, _ := web.FS.ReadFile("index.html")
 	serveAdmin := func(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +70,7 @@ func NewServer(
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(CORS)
+	r.Use(TraceMiddleware)
 	r.Use(IAMContextMiddleware(iamSvc))
 
 	// Public
@@ -136,6 +141,15 @@ func NewServer(
 		r.Get("/triggers/{id}", trh.GetTrigger)
 		r.Put("/triggers/{id}", trh.UpdateTrigger)
 		r.Delete("/triggers/{id}", trh.DeleteTrigger)
+
+		// Monitoring — traces, anomalies, custom metrics
+		r.Get("/monitoring/summary", mh.GetMonitoringSummary)
+		r.Get("/traces", mh.ListTraces)
+		r.Get("/traces/{id}", mh.GetTrace)
+		r.Get("/anomalies", mh.ListAnomalies)
+		r.Post("/anomalies/{id}/resolve", mh.ResolveAnomaly)
+		r.Get("/functions/{id}/metrics", mh.GetFunctionMetrics)
+		r.Get("/functions/{id}/invocations/{invId}", mh.GetInvocationDetail)
 	})
 
 	// Admin console SPA (served for all /admin/* paths not matched above)
