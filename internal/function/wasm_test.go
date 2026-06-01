@@ -62,7 +62,7 @@ func TestEngine_InvokeWASI_HelloWorld(t *testing.T) {
 import "fmt"
 func main() { fmt.Print("hello wasm") }`)
 
-	out, err := eng.InvokeWASI(ctx, wasm, 10*time.Second, nil)
+	out, err := eng.InvokeWASI(ctx, wasm, 10*time.Second, nil, nil)
 	if err != nil {
 		t.Fatalf("invoke error: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestEngine_InvokeWASI_Timeout(t *testing.T) {
 	wasm := buildWASM(t, `package main
 func main() { for {} }`)
 
-	_, err := eng.InvokeWASI(ctx, wasm, 200*time.Millisecond, nil)
+	_, err := eng.InvokeWASI(ctx, wasm, 200*time.Millisecond, nil, nil)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
