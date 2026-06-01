@@ -514,6 +514,7 @@ function navigate(page) {
   if (page !== 'identity') identityTab = 'users';
   if (page !== 'traces') currentTrace = null;
   S.page = page;
+  history.pushState({page}, '', '/admin/' + page);
   document.getElementById('page-title').textContent = pageTitles[page] || page;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);
@@ -571,7 +572,9 @@ function showApp() {
   const email = S.email || '';
   document.getElementById('user-email-display').textContent = email;
   document.getElementById('user-avatar').textContent = email ? email[0].toUpperCase() : 'A';
-  navigate('dashboard');
+  const pathPage = window.location.pathname.split('/admin/')[1] || 'dashboard';
+  const startPage = Object.keys(pageTitles).includes(pathPage) ? pathPage : 'dashboard';
+  navigate(startPage);
 }
 
 function logout() {
@@ -3057,6 +3060,11 @@ async function loadTraces() {
 }
 
 function openTrace(trace) {
+  S.page = 'traces';
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === 'traces');
+  });
+  history.pushState({page: 'traces'}, '', '/admin/traces');
   currentTrace = trace;
   loadTraceDetail(trace);
 }
@@ -3244,6 +3252,23 @@ function setActions(html) {
 }
 
 // ═══════════════════════ BOOT ════════════════════════════════
+window.addEventListener('popstate', e => {
+  if (document.getElementById('app').style.display === 'none') return;
+  const page = (e.state && e.state.page) || 'dashboard';
+  if (page !== 'storage') currentBucket = null;
+  if (page !== 'tables') currentTable = null;
+  if (page !== 'functions') currentFunction = null;
+  if (page !== 'frontends') currentFrontend = null;
+  if (page !== 'identity') identityTab = 'users';
+  if (page !== 'traces') currentTrace = null;
+  S.page = page;
+  document.getElementById('page-title').textContent = pageTitles[page] || page;
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === page);
+  });
+  loadPage(page);
+});
+
 init();
 </script>
 </body>
