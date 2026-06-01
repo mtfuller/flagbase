@@ -362,9 +362,9 @@ td.text-primary{color:var(--text)}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
         Storage
       </div>
-      <div class="nav-item" data-page="users" onclick="navigate('users')">
+      <div class="nav-item" data-page="identity" onclick="navigate('identity')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        Users
+        Identity
       </div>
       <div class="nav-item" data-page="functions" onclick="navigate('functions')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -504,13 +504,14 @@ function fmtBytes(n) {
 }
 
 // ═══════════════════════ ROUTER ══════════════════════════════
-const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', users:'Users', functions:'Functions', tables:'Tables', frontends:'Frontends', monitoring:'Monitoring', traces:'Traces'};
+const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', identity:'Identity', functions:'Functions', tables:'Tables', frontends:'Frontends', monitoring:'Monitoring', traces:'Traces'};
 
 function navigate(page) {
   if (page !== 'storage') currentBucket = null;
   if (page !== 'tables') currentTable = null;
   if (page !== 'functions') currentFunction = null;
   if (page !== 'frontends') currentFrontend = null;
+  if (page !== 'identity') identityTab = 'users';
   if (page !== 'traces') currentTrace = null;
   S.page = page;
   document.getElementById('page-title').textContent = pageTitles[page] || page;
@@ -528,7 +529,7 @@ function loadPage(page) {
     flags: loadFlags,
     gateway: loadGateway,
     storage: loadStorage,
-    users: loadUsers,
+    identity: loadIdentity,
     functions: loadFunctions,
     tables: loadTables,
     frontends: loadFrontends,
@@ -1348,40 +1349,83 @@ async function confirmDeleteBucket(name) {
   } catch(err) { toast(err.message, 'error'); }
 }
 
-// ═══════════════════════ USERS ════════════════════════════════
-async function loadUsers() {
-  setActions(`<button class="btn btn-primary btn-sm" onclick="openUserModal()">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    New User
-  </button>`);
+// ═══════════════════════ IDENTITY ═════════════════════════════
+let identityTab = 'users';
+
+async function loadIdentity() {
+  setActions('');
+  identityTab = identityTab || 'users';
+  renderIdentityShell();
+  switchIdentityTab(identityTab);
+}
+
+function renderIdentityShell() {
+  document.getElementById('content').innerHTML = `
+    <div class="tab-bar" style="margin-bottom:20px">
+      <button class="tab-btn${identityTab==='users'?' active':''}" onclick="switchIdentityTab('users')">Users</button>
+      <button class="tab-btn${identityTab==='roles'?' active':''}" onclick="switchIdentityTab('roles')">Roles</button>
+      <button class="tab-btn${identityTab==='groups'?' active':''}" onclick="switchIdentityTab('groups')">Groups</button>
+    </div>
+    <div id="identity-panel"></div>`;
+}
+
+function switchIdentityTab(tab) {
+  identityTab = tab;
+  document.querySelectorAll('.tab-bar .tab-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.trim().toLowerCase() === tab);
+  });
+  const panel = document.getElementById('identity-panel');
+  if (!panel) return;
+  panel.innerHTML = '<div class="loading"><div class="spin"></div> Loading…</div>';
+  ({users: loadIdentityUsers, roles: loadIdentityRoles, groups: loadIdentityGroups}[tab] || loadIdentityUsers)();
+}
+
+// ── Users tab ──────────────────────────────────────────────────
+async function loadIdentityUsers() {
+  const panel = document.getElementById('identity-panel');
   try {
     const users = await GET('/admin/api/users');
     if (!users || users.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      panel.innerHTML = `<div class="empty-state">
         <div class="empty-icon">👥</div>
         <div class="empty-title">No users yet</div>
         <div class="empty-text">Create users to give them access to the platform.</div>
+        <button class="btn btn-primary" onclick="openUserModal()">Create User</button>
       </div>`;
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
-      <table>
-        <thead><tr><th>Email</th><th>Role</th><th>Tenant</th><th>Created</th><th></th></tr></thead>
-        <tbody>${users.map(u => `<tr>
-          <td class="text-primary">${esc(u.email)}</td>
-          <td>${roleBadge(u.role)}</td>
-          <td style="color:var(--text-3)">${esc(u.tenant_id)}</td>
-          <td style="color:var(--text-2)">${fmtDate(u.created_at)}</td>
-          <td>
-            <button class="btn btn-danger btn-sm btn-icon" onclick="deleteUser('${esc(u.id)}','${esc(u.email)}')" title="Delete">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-            </button>
-          </td>
-        </tr>`).join('')}</tbody>
-      </table>
-    </div></div>`;
+    panel.innerHTML = `
+      <div class="section-header">
+        <span class="section-title">Users <span class="badge badge-blue" style="font-size:11px;margin-left:6px">${users.length}</span></span>
+        <button class="btn btn-primary btn-sm" onclick="openUserModal()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New User
+        </button>
+      </div>
+      <div class="card"><div class="table-wrap">
+        <table>
+          <thead><tr><th>Email</th><th>Role</th><th>Groups</th><th>Tenant</th><th>Created</th><th></th></tr></thead>
+          <tbody>${users.map(u => `<tr>
+            <td class="text-primary">${esc(u.email)}</td>
+            <td>${roleBadge(u.role)}</td>
+            <td>${(u.groups && u.groups.length > 0)
+              ? u.groups.map(g => `<span class="badge badge-purple" style="margin-right:3px">${esc(g)}</span>`).join('')
+              : '<span style="color:var(--text-3)">—</span>'}</td>
+            <td style="color:var(--text-3)">${esc(u.tenant_id)}</td>
+            <td style="color:var(--text-2)">${fmtDate(u.created_at)}</td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-ghost btn-sm btn-icon" onclick='openChangeRoleModal(${JSON.stringify({id:u.id,email:u.email,role:u.role})})' title="Change Role">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+              </button>
+              <button class="btn btn-danger btn-sm btn-icon" onclick="deleteUser('${esc(u.id)}','${esc(u.email)}')" title="Delete">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+              </button>
+            </td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div></div>`;
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    panel.innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
   }
 }
 
@@ -1418,7 +1462,34 @@ async function createUser() {
   if (!email || !password) { toast('Email and password are required', 'error'); return; }
   try {
     await POST('/auth/register', {email, password, role});
-    closeModal(); toast('User created'); loadUsers();
+    closeModal(); toast('User created'); loadIdentityUsers();
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+function openChangeRoleModal(u) {
+  openModal('Change Role', `
+    <div class="modal-body">
+      <p style="color:var(--text-2);margin-bottom:16px">Change role for <strong style="color:var(--text)">${esc(u.email)}</strong></p>
+      <div class="form-group">
+        <label class="form-label">New Role</label>
+        <select class="form-input form-select" id="cr-role">
+          <option value="user"${u.role==='user'?' selected':''}>user — read-only access</option>
+          <option value="developer"${u.role==='developer'?' selected':''}>developer — read/write flags</option>
+          <option value="admin"${u.role==='admin'?' selected':''}>admin — full platform access</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmChangeRole('${esc(u.id)}')">Update Role</button>
+    </div>`);
+}
+
+async function confirmChangeRole(id) {
+  const role = document.getElementById('cr-role').value;
+  try {
+    await PUT('/admin/api/users/' + id + '/role', {role});
+    closeModal(); toast('Role updated'); loadIdentityUsers();
   } catch(err) { toast(err.message, 'error'); }
 }
 
@@ -1436,7 +1507,211 @@ async function deleteUser(id, email) {
 async function confirmDeleteUser(id) {
   try {
     await DEL('/admin/api/users/' + id);
-    closeModal(); toast('User deleted'); loadUsers();
+    closeModal(); toast('User deleted'); loadIdentityUsers();
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+// ── Roles tab ──────────────────────────────────────────────────
+const ROLE_DEFS = [
+  {key:'admin',      label:'Admin',      cls:'badge-purple', desc:'Full platform access — manage users, flags, storage, and configuration.'},
+  {key:'developer',  label:'Developer',  cls:'badge-blue',   desc:'Read and write feature flags. Cannot manage users or platform settings.'},
+  {key:'user',       label:'User',       cls:'badge-green',  desc:'Read-only access to flags and gateway routes.'},
+];
+
+async function loadIdentityRoles() {
+  const panel = document.getElementById('identity-panel');
+  try {
+    const users = await GET('/admin/api/users');
+    const byRole = {admin:[], developer:[], user:[]};
+    (users||[]).forEach(u => { if (byRole[u.role]) byRole[u.role].push(u); });
+
+    panel.innerHTML = `
+      <div class="section-header" style="margin-bottom:20px">
+        <span class="section-title">Roles</span>
+      </div>
+      <div style="display:grid;gap:16px">
+        ${ROLE_DEFS.map(r => `
+          <div class="card">
+            <div class="card-header">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="badge ${r.cls}">${r.label}</span>
+                <span style="font-size:12px;color:var(--text-2)">${r.desc}</span>
+              </div>
+              <span class="badge badge-blue">${byRole[r.key].length} user${byRole[r.key].length!==1?'s':''}</span>
+            </div>
+            ${byRole[r.key].length > 0 ? `
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Email</th><th>Tenant</th><th>Joined</th><th></th></tr></thead>
+                <tbody>${byRole[r.key].map(u => `<tr>
+                  <td class="text-primary">${esc(u.email)}</td>
+                  <td style="color:var(--text-3)">${esc(u.tenant_id)}</td>
+                  <td style="color:var(--text-2)">${fmtDate(u.created_at)}</td>
+                  <td>
+                    <button class="btn btn-ghost btn-sm btn-icon" onclick='openChangeRoleModal(${JSON.stringify({id:u.id,email:u.email,role:u.role})})' title="Change Role">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+                    </button>
+                  </td>
+                </tr>`).join('')}</tbody>
+              </table>
+            </div>` : `<div style="padding:20px;color:var(--text-3);font-size:13px;text-align:center">No users with this role</div>`}
+          </div>`).join('')}
+      </div>`;
+  } catch(err) {
+    panel.innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+// ── Groups tab ─────────────────────────────────────────────────
+async function loadIdentityGroups() {
+  const panel = document.getElementById('identity-panel');
+  try {
+    const groups = await GET('/admin/api/groups');
+    panel.innerHTML = `
+      <div class="section-header">
+        <span class="section-title">Groups <span class="badge badge-blue" style="font-size:11px;margin-left:6px">${(groups||[]).length}</span></span>
+        <button class="btn btn-primary btn-sm" onclick="openCreateGroupModal()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Group
+        </button>
+      </div>
+      <div style="color:var(--text-3);font-size:12px;margin-bottom:16px">
+        Groups can be used in flag rules via the <code style="background:var(--bg-elevated);padding:1px 5px;border-radius:3px">groups</code> attribute with the <code style="background:var(--bg-elevated);padding:1px 5px;border-radius:3px">contains</code> or <code style="background:var(--bg-elevated);padding:1px 5px;border-radius:3px">in</code> operator.
+      </div>
+      ${!groups || groups.length === 0 ? `<div class="empty-state">
+        <div class="empty-icon">🏷️</div>
+        <div class="empty-title">No groups yet</div>
+        <div class="empty-text">Create groups to organise users for fine-grained flag targeting.</div>
+        <button class="btn btn-primary" onclick="openCreateGroupModal()">Create Group</button>
+      </div>` : `<div style="display:grid;gap:12px">
+        ${groups.map(g => `
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <span class="card-title">${esc(g.name)}</span>
+                ${g.description ? `<div style="font-size:12px;color:var(--text-2);margin-top:2px">${esc(g.description)}</div>` : ''}
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="badge badge-blue">${g.member_count} member${g.member_count!==1?'s':''}</span>
+                <button class="btn btn-ghost btn-sm" onclick="openGroupMembersModal('${esc(g.id)}','${esc(g.name)}')">Manage</button>
+                <button class="btn btn-danger btn-sm btn-icon" onclick="deleteGroup('${esc(g.id)}','${esc(g.name)}')" title="Delete">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>`}`;
+  } catch(err) {
+    panel.innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+function openCreateGroupModal() {
+  openModal('Create Group', `
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input class="form-input" id="grp-name" type="text" placeholder="e.g. beta-testers" autocomplete="off" required>
+        <div class="form-hint">Used as the value in flag rules (e.g. attribute: groups, operator: contains, value: beta-testers)</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <input class="form-input" id="grp-desc" type="text" placeholder="Optional description">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createGroup()">Create Group</button>
+    </div>`);
+}
+
+async function createGroup() {
+  const name = document.getElementById('grp-name').value.trim();
+  const description = document.getElementById('grp-desc').value.trim();
+  if (!name) { toast('Name is required', 'error'); return; }
+  try {
+    await POST('/admin/api/groups', {name, description});
+    closeModal(); toast('Group created'); loadIdentityGroups();
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function deleteGroup(id, name) {
+  openModal('Delete Group', `
+    <div class="modal-body">
+      <p style="color:var(--text-2)">Delete group <strong style="color:var(--text)">${esc(name)}</strong>? All members will be removed from the group.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDeleteGroup('${esc(id)}')">Delete Group</button>
+    </div>`);
+}
+
+async function confirmDeleteGroup(id) {
+  try {
+    await DEL('/admin/api/groups/' + id);
+    closeModal(); toast('Group deleted'); loadIdentityGroups();
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function openGroupMembersModal(groupId, groupName) {
+  openModal('Manage Members — ' + groupName, '<div class="modal-body"><div class="loading"><div class="spin"></div> Loading…</div></div>', false);
+  try {
+    const [members, allUsers] = await Promise.all([
+      GET('/admin/api/groups/' + groupId + '/members'),
+      GET('/admin/api/users'),
+    ]);
+    const memberIds = new Set((members||[]).map(u => u.id));
+    const nonMembers = (allUsers||[]).filter(u => !memberIds.has(u.id));
+
+    document.getElementById('modal-body').innerHTML = `
+      <div class="modal-body">
+        <div style="margin-bottom:16px">
+          <div class="rules-label" style="margin-bottom:8px">Current Members (${(members||[]).length})</div>
+          ${members && members.length > 0
+            ? members.map(u => `<div class="ov-row">
+                <span style="flex:1;color:var(--text)">${esc(u.email)}</span>
+                ${roleBadge(u.role)}
+                <button class="btn btn-danger btn-sm btn-icon" onclick="removeMember('${esc(groupId)}','${esc(u.id)}','${esc(groupName)}')" title="Remove">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>`).join('')
+            : '<div style="color:var(--text-3);font-size:13px;padding:8px 0">No members yet</div>'}
+        </div>
+        ${nonMembers.length > 0 ? `
+        <div>
+          <div class="rules-label" style="margin-bottom:8px">Add Member</div>
+          <div style="display:flex;gap:8px">
+            <select class="form-input form-select" id="add-member-select" style="flex:1">
+              ${nonMembers.map(u => `<option value="${esc(u.id)}">${esc(u.email)} (${esc(u.role)})</option>`).join('')}
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="addMember('${esc(groupId)}','${esc(groupName)}')">Add</button>
+          </div>
+        </div>` : '<div style="color:var(--text-3);font-size:12px">All users are already in this group.</div>'}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">Done</button>
+      </div>`;
+  } catch(err) {
+    document.getElementById('modal-body').innerHTML = `<div class="modal-body"><div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div></div>`;
+  }
+}
+
+async function addMember(groupId, groupName) {
+  const userId = document.getElementById('add-member-select').value;
+  try {
+    await POST('/admin/api/groups/' + groupId + '/members', {user_id: userId});
+    toast('Member added');
+    openGroupMembersModal(groupId, groupName);
+    loadIdentityGroups();
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function removeMember(groupId, userId, groupName) {
+  try {
+    await DEL('/admin/api/groups/' + groupId + '/members/' + userId);
+    toast('Member removed');
+    openGroupMembersModal(groupId, groupName);
+    loadIdentityGroups();
   } catch(err) { toast(err.message, 'error'); }
 }
 

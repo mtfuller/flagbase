@@ -16,12 +16,23 @@ func newTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'user', tenant_id TEXT NOT NULL DEFAULT 'default',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`)
-	if err != nil {
-		t.Fatalf("migrate: %v", err)
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+		`CREATE TABLE IF NOT EXISTS groups (
+        id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT NOT NULL DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+		`CREATE TABLE IF NOT EXISTS user_groups (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        PRIMARY KEY (user_id, group_id))`,
+	}
+	for _, s := range stmts {
+		if _, err = db.Exec(s); err != nil {
+			t.Fatalf("migrate: %v", err)
+		}
 	}
 	return db
 }

@@ -252,4 +252,19 @@ CREATE TABLE IF NOT EXISTS function_triggers (
     updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_function_triggers_fn ON function_triggers(function_id);
+
+CREATE TABLE IF NOT EXISTS groups (
+    id          TEXT PRIMARY KEY,
+    name        TEXT UNIQUE NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_groups (
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_id    TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, group_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_groups_user  ON user_groups(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_groups_group ON user_groups(group_id);
 `

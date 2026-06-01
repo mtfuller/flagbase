@@ -87,6 +87,129 @@ func (h *AdminHandlers) AdminDeleteUser(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// AdminUpdateUserRole changes a user's role.
+func (h *AdminHandlers) AdminUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.IAM.UpdateUserRole(id, req.Role); err != nil {
+		switch {
+		case errors.Is(err, iam.ErrInvalidRole):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, iam.ErrUserNotFound):
+			writeError(w, http.StatusNotFound, "user not found")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminListGroups returns all groups with member counts.
+func (h *AdminHandlers) AdminListGroups(w http.ResponseWriter, r *http.Request) {
+	groups, err := h.IAM.ListGroups()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if groups == nil {
+		groups = []*iam.Group{}
+	}
+	writeJSON(w, http.StatusOK, groups)
+}
+
+// AdminCreateGroup creates a new group.
+func (h *AdminHandlers) AdminCreateGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	g, err := h.IAM.CreateGroup(req.Name, req.Description)
+	if err != nil {
+		if errors.Is(err, iam.ErrGroupExists) {
+			writeError(w, http.StatusConflict, "group already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, g)
+}
+
+// AdminDeleteGroup removes a group.
+func (h *AdminHandlers) AdminDeleteGroup(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.IAM.DeleteGroup(id); err != nil {
+		if errors.Is(err, iam.ErrGroupNotFound) {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminListGroupMembers returns users in a group.
+func (h *AdminHandlers) AdminListGroupMembers(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	users, err := h.IAM.ListGroupMembers(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if users == nil {
+		users = []*iam.User{}
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
+// AdminAddGroupMember adds a user to a group.
+func (h *AdminHandlers) AdminAddGroupMember(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "id")
+	var req struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.UserID == "" {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+	if err := h.IAM.AddUserToGroup(req.UserID, groupID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminRemoveGroupMember removes a user from a group.
+func (h *AdminHandlers) AdminRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "id")
+	userID := chi.URLParam(r, "userId")
+	if err := h.IAM.RemoveUserFromGroup(userID, groupID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type metricSummary struct {
 	FlagKey   string  `json:"flag_key"`
 	EventType string  `json:"event_type"`
