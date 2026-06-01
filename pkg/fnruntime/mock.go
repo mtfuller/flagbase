@@ -22,15 +22,26 @@ import (
 //
 //	    rows := rt.RecordsInTable("orders")
 //	    if len(rows) != 1 { t.Fatalf("expected 1 order") }
+//	    metrics := rt.PublishedMetrics()
+//	    // assert metrics…
 //	}
 type MockRuntime struct {
-	mu      sync.Mutex
-	buckets map[string]map[string][]byte
-	flags   map[string]bool
-	tables  map[string][]map[string]interface{}
-	fetcher func(FetchRequest) (*FetchResponse, error)
-	invoker func(id string) ([]byte, error)
-	seq     int
+	mu             sync.Mutex
+	buckets        map[string]map[string][]byte
+	flags          map[string]bool
+	tables         map[string][]map[string]interface{}
+	fetcher        func(FetchRequest) (*FetchResponse, error)
+	invoker        func(id string) ([]byte, error)
+	seq            int
+	traceID        string
+	publishedMetrics []MockMetric
+}
+
+// MockMetric is a metric captured during a mock function execution.
+type MockMetric struct {
+	Name  string
+	Value float64
+	Tags  map[string]string
 }
 
 // NewMockRuntime returns an empty MockRuntime ready for test seeding.
@@ -40,6 +51,23 @@ func NewMockRuntime() *MockRuntime {
 		flags:   make(map[string]bool),
 		tables:  make(map[string][]map[string]interface{}),
 	}
+}
+
+// SetTraceID sets the trace ID returned by GetTraceID calls during test execution.
+func (m *MockRuntime) SetTraceID(id string) *MockRuntime {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.traceID = id
+	return m
+}
+
+// PublishedMetrics returns a copy of all metrics recorded via PublishMetric during the test.
+func (m *MockRuntime) PublishedMetrics() []MockMetric {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]MockMetric, len(m.publishedMetrics))
+	copy(out, m.publishedMetrics)
+	return out
 }
 
 // ---------- seed / setup helpers (chainable) ----------
@@ -280,4 +308,21 @@ func (m *MockRuntime) QueryRecords(tableKey string, opts QueryOptions) ([]*Recor
 		out = append(out, &Record{ID: id, Data: data})
 	}
 	return out, nil
+}
+
+func (m *MockRuntime) PublishMetric(name string, value float64, tags map[string]string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make(map[string]string, len(tags))
+	for k, v := range tags {
+		cp[k] = v
+	}
+	m.publishedMetrics = append(m.publishedMetrics, MockMetric{Name: name, Value: value, Tags: cp})
+	return true
+}
+
+func (m *MockRuntime) GetTraceID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.traceID
 }

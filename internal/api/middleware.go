@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/mtfuller/flagbase/internal/iam"
+	"github.com/mtfuller/flagbase/internal/tracing"
 )
 
 // IAMContextMiddleware extracts and validates the Authorization JWT, then injects
@@ -44,6 +45,21 @@ func RequireRole(role string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// TraceMiddleware generates a new trace ID for every request and injects it
+// into the context so downstream handlers (function invoke, gateway, etc.) can
+// link their operations to the originating HTTP call.
+func TraceMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		traceID := r.Header.Get("X-Flagbase-Trace-Id")
+		if traceID == "" {
+			traceID = tracing.NewTraceID()
+		}
+		ctx := tracing.WithTraceID(r.Context(), traceID)
+		w.Header().Set("X-Flagbase-Trace-Id", traceID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // CORS adds permissive CORS headers for local and dashboard use.

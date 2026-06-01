@@ -15,9 +15,15 @@ import (
 	"github.com/tetratelabs/wazero/sys"
 )
 
+// WASIMetrics holds performance counters captured during a single WASM invocation.
+type WASIMetrics struct {
+	PeakMemoryBytes uint32
+	HostCalls       int
+}
+
 // Engine wraps a Wazero runtime for executing sandboxed WASM functions.
 // Each Invoke call instantiates a fresh module with a hard execution deadline,
-// preventing runaway functions from starving shared CPU resources (single-node caveat).
+// preventing runaway functions from starving shared CPU resources.
 type Engine struct {
 	runtime  wazero.Runtime
 	wasiOnce sync.Once
@@ -68,8 +74,7 @@ func (e *Engine) Invoke(ctx context.Context, wasmPath string, timeout time.Durat
 	}
 
 	// If the WASM function returns (ptr uint32, size uint32), read that slice
-	// from linear memory. Functions with no return values or a single return
-	// value produce no output bytes.
+	// from linear memory. Functions with no return values produce no output bytes.
 	if len(results) < 2 {
 		return []byte{}, nil
 	}
@@ -83,21 +88,17 @@ func (e *Engine) Invoke(ctx context.Context, wasmPath string, timeout time.Durat
 		return nil, fmt.Errorf("wasm: cannot read output at ptr=%d size=%d (memory size=%d)",
 			ptr, size, mod.Memory().Size())
 	}
-	// Copy because buf is a view into the WASM linear memory which may be
-	// reclaimed once the module is closed.
 	out := make([]byte, size)
 	copy(out, buf)
 	return out, nil
 }
 
-// InvokeWASI loads and runs a WASI preview1 WASM module (e.g. compiled with
-// GOOS=wasip1 GOARCH=wasm). The module's main() is called automatically on
-// instantiation; stdout is captured and returned. Exit code 0 is success.
-// If deps is non-nil, the "flagbase" host module is registered once and host
-// functions (storage, flag evaluation, etc.) become available to WASM code.
-func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps) ([]byte, error) {
+// InvokeWASI loads and runs a WASI preview1 WASM module. The module's main()
+// is called automatically on instantiation; stdout is captured and returned.
+// m is populated with compute metrics if non-nil.
+func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps, m *WASIMetrics) ([]byte, error) {
 	var stdout bytes.Buffer
-	if err := e.invokeWASIWith(ctx, wasmBytes, timeout, deps, &stdout); err != nil {
+	if err := e.invokeWASIWith(ctx, wasmBytes, timeout, deps, &stdout, m); err != nil {
 		return nil, err
 	}
 	return stdout.Bytes(), nil
@@ -105,12 +106,13 @@ func (e *Engine) InvokeWASI(ctx context.Context, wasmBytes []byte, timeout time.
 
 // InvokeWASIStream runs a WASI WASM module and writes stdout directly to w as
 // bytes arrive, enabling real-time streaming to callers.
-func (e *Engine) InvokeWASIStream(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps, w io.Writer) error {
-	return e.invokeWASIWith(ctx, wasmBytes, timeout, deps, w)
+// m is populated with compute metrics if non-nil.
+func (e *Engine) InvokeWASIStream(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps, w io.Writer, m *WASIMetrics) error {
+	return e.invokeWASIWith(ctx, wasmBytes, timeout, deps, w, m)
 }
 
-// invokeWASIWith is the shared implementation backing both InvokeWASI and InvokeWASIStream.
-func (e *Engine) invokeWASIWith(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps, stdout io.Writer) error {
+// invokeWASIWith is the shared implementation backing InvokeWASI and InvokeWASIStream.
+func (e *Engine) invokeWASIWith(ctx context.Context, wasmBytes []byte, timeout time.Duration, deps *HostDeps, stdout io.Writer, m *WASIMetrics) error {
 	// Instantiate the WASI host module once per runtime lifetime.
 	e.wasiOnce.Do(func() {
 		_, e.wasiErr = wasi_snapshot_preview1.NewBuilder(e.runtime).Instantiate(ctx)
@@ -132,6 +134,29 @@ func (e *Engine) invokeWASIWith(ctx context.Context, wasmBytes []byte, timeout t
 	defer cancel()
 
 	st := &invState{}
+	// Wire span/metric callbacks when a tracer is available.
+	if deps != nil && deps.Tracer != nil {
+		traceID := deps.TraceID
+		tracer := deps.Tracer
+		st.recordSpan = func(eventType, status string, startedAt time.Time, durationMs int64, metadata map[string]interface{}) {
+			st.spanSeq++
+			_, _ = tracer.RecordSpan(traceID, "", eventType, status, startedAt, durationMs, st.spanSeq, metadata)
+		}
+	}
+	if deps != nil && deps.DB != nil && deps.FnID != "" {
+		db := deps.DB
+		fnID := deps.FnID
+		invID := deps.InvID
+		traceID := deps.TraceID
+		st.recordCustomMetric = func(name string, value float64, tags string) {
+			id, _ := newID()
+			_, _ = db.ExecContext(ctx, `
+				INSERT INTO function_custom_metrics
+					(id, trace_id, function_id, invocation_id, metric_name, metric_value, tags)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				id, traceID, fnID, invID, name, value, tags)
+		}
+	}
 	execCtx = context.WithValue(execCtx, invStateKey{}, st)
 
 	compiled, err := e.runtime.CompileModule(execCtx, wasmBytes)
@@ -150,8 +175,20 @@ func (e *Engine) invokeWASIWith(ctx context.Context, wasmBytes []byte, timeout t
 
 	mod, err := e.runtime.InstantiateModule(execCtx, compiled, cfg)
 	if mod != nil {
+		// Capture peak memory before closing — memory can only grow in WASM so
+		// the final size is the peak.
+		if mem := mod.Memory(); mem != nil {
+			st.peakMemoryBytes = mem.Size()
+		}
 		defer mod.Close(ctx)
 	}
+
+	// Populate caller-supplied metrics struct.
+	if m != nil {
+		m.PeakMemoryBytes = st.peakMemoryBytes
+		m.HostCalls = st.hostCalls
+	}
+
 	// WASI programs signal clean exit via proc_exit(0), which wazero surfaces
 	// as a *sys.ExitError with ExitCode() == 0. Treat that as success.
 	if err != nil {
@@ -163,3 +200,4 @@ func (e *Engine) invokeWASIWith(ctx context.Context, wasmBytes []byte, timeout t
 	}
 	return nil
 }
+

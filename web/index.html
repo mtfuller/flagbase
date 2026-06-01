@@ -222,6 +222,42 @@ td.text-primary{color:var(--text)}
 .isolation-bar-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.4px}
 .isolation-fields{display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:center}
 
+/* ── Waterfall / Trace ───────────────────────────────────────── */
+.waterfall-wrap{overflow-x:auto}
+.waterfall-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.waterfall-row:last-child{border-bottom:none}
+.waterfall-label{width:200px;flex-shrink:0;font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.waterfall-label .span-type{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.waterfall-track{flex:1;position:relative;height:20px;min-width:200px}
+.waterfall-bar{position:absolute;height:100%;border-radius:3px;min-width:3px;cursor:pointer;opacity:.85;transition:opacity .1s}
+.waterfall-bar:hover{opacity:1}
+.wf-http_request{background:#22c55e}
+.wf-function_invoke{background:#6366f1}
+.wf-fn_invoke_child{background:#a855f7}
+.wf-table_write{background:#f59e0b}
+.wf-bucket_write{background:#06b6d4}
+.wf-http_fetch{background:#3b82f6}
+.wf-flag_eval{background:#8b5cf6}
+.wf-custom_metric{background:#10b981}
+.wf-default{background:#64748b}
+.waterfall-ms{width:60px;flex-shrink:0;font-size:11px;color:var(--text-3);text-align:right;font-family:'JetBrains Mono',monospace}
+
+/* ── Anomaly badges ──────────────────────────────────────────── */
+.badge-critical{background:rgba(248,113,113,.15);color:#f87171;border:1px solid rgba(248,113,113,.25)}
+.badge-warning{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.2)}
+.badge-info{background:rgba(96,165,250,.12);color:#60a5fa;border:1px solid rgba(96,165,250,.2)}
+.anomaly-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px}
+.anomaly-card.critical{border-left:3px solid var(--danger)}
+.anomaly-card.warning{border-left:3px solid var(--warning)}
+
+/* ── Metric mini-chart ───────────────────────────────────────── */
+.metric-sparkline{display:flex;align-items:flex-end;gap:2px;height:40px}
+.metric-sparkline-bar{flex:1;background:rgba(99,102,241,.5);border-radius:2px 2px 0 0;min-height:2px}
+
+/* ── Monitoring grid ─────────────────────────────────────────── */
+.monitor-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:900px){.monitor-grid{grid-template-columns:1fr}}
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media(max-width:768px){
   .stats-grid{grid-template-columns:1fr 1fr}
@@ -342,6 +378,15 @@ td.text-primary{color:var(--text)}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Frontends
       </div>
+      <div style="height:1px;background:var(--border);margin:8px 0"></div>
+      <div class="nav-item" data-page="monitoring" onclick="navigate('monitoring')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Monitoring
+      </div>
+      <div class="nav-item" data-page="traces" onclick="navigate('traces')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Traces
+      </div>
     </div>
 
     <div class="sidebar-footer">
@@ -452,9 +497,14 @@ function statusBadge(s) {
   const map = {draft:'badge-yellow', testing:'badge-blue', ga:'badge-green', deprecated:'badge-red'};
   return `<span class="badge ${map[s]||'badge-yellow'}">${esc(s||'draft')}</span>`;
 }
+function fmtBytes(n) {
+  if (n < 1024) return n + 'B';
+  if (n < 1024*1024) return (n/1024).toFixed(1) + 'KB';
+  return (n/1024/1024).toFixed(1) + 'MB';
+}
 
 // ═══════════════════════ ROUTER ══════════════════════════════
-const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', identity:'Identity', functions:'Functions', tables:'Tables', frontends:'Frontends'};
+const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', identity:'Identity', functions:'Functions', tables:'Tables', frontends:'Frontends', monitoring:'Monitoring', traces:'Traces'};
 
 function navigate(page) {
   if (page !== 'storage') currentBucket = null;
@@ -462,6 +512,7 @@ function navigate(page) {
   if (page !== 'functions') currentFunction = null;
   if (page !== 'frontends') currentFrontend = null;
   if (page !== 'identity') identityTab = 'users';
+  if (page !== 'traces') currentTrace = null;
   S.page = page;
   document.getElementById('page-title').textContent = pageTitles[page] || page;
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -482,6 +533,8 @@ function loadPage(page) {
     functions: loadFunctions,
     tables: loadTables,
     frontends: loadFrontends,
+    monitoring: loadMonitoring,
+    traces: loadTraces,
   }[page] || loadDashboard)();
 }
 
@@ -1836,12 +1889,13 @@ async function loadFunctionDetail(fn) {
           <td style="color:var(--text-2)">${fmtDate(v.created_at)}</td>
         </tr>`).join('');
     const invRows = invocations.length === 0
-      ? `<tr><td colspan="4" style="text-align:center;color:var(--text-3);padding:24px">No invocations yet. Hit Invoke to run the function.</td></tr>`
+      ? `<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:24px">No invocations yet. Hit Invoke to run the function.</td></tr>`
       : invocations.map(inv => `<tr>
-          <td style="color:var(--text-2)">${fmtDate(inv.started_at)}</td>
+          <td style="color:var(--text-2)">${fmtDatetime(inv.started_at)}</td>
           <td>${inv.success ? '<span class="badge badge-green">success</span>' : '<span class="badge badge-red">error</span>'}</td>
-          <td style="font-size:12px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${inv.completed_at ? formatDuration(inv.started_at, inv.completed_at) : '—'}</td>
-          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-family:'JetBrains Mono',monospace;color:${inv.success ? '#a5b4fc' : 'var(--danger)'}">
+          <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${inv.execution_ms != null ? inv.execution_ms+'ms' : (inv.completed_at ? formatDuration(inv.started_at, inv.completed_at) : '—')}</td>
+          <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-3)">${inv.peak_memory_bytes > 0 ? fmtBytes(inv.peak_memory_bytes) : '—'} · ${inv.host_calls} calls</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-family:'JetBrains Mono',monospace;color:${inv.success ? '#a5b4fc' : 'var(--danger)'}">
             ${esc(inv.error || inv.output || '(no output)')}
           </td>
         </tr>`).join('');
@@ -1867,12 +1921,12 @@ async function loadFunctionDetail(fn) {
         <div class="card">
           <div class="card-header"><span class="card-title">Invocations</span><span class="badge badge-blue">${invocations.length}</span></div>
           <div class="table-wrap"><table>
-            <thead><tr><th>When</th><th>Result</th><th>Duration</th><th>Output</th></tr></thead>
+            <thead><tr><th>When</th><th>Result</th><th>Exec Time</th><th>Memory · Calls</th><th>Output</th></tr></thead>
             <tbody>${invRows}</tbody>
           </table></div>
         </div>
       </div>
-      <div class="card">
+      <div class="card" style="margin-bottom:16px">
         <div class="card-header">
           <span class="card-title">Triggers</span><span class="badge badge-blue">${triggers.length}</span>
           <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openAddTriggerModal('${esc(fn.id)}','${esc(fn.name)}')">
@@ -1884,7 +1938,15 @@ async function loadFunctionDetail(fn) {
           <thead><tr><th>Event</th><th>Config</th><th>Status</th><th></th></tr></thead>
           <tbody>${triggerRows}</tbody>
         </table></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Custom Metrics</span>
+          <span style="font-size:11px;color:var(--text-3)">Published via <code style="color:var(--primary)">PublishMetric()</code></span>
+        </div>
+        <div id="fn-metrics-tab" class="card-body"></div>
       </div>`;
+    loadFunctionMetrics(fn.id);
   } catch(err) {
     document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
   }
@@ -2843,6 +2905,337 @@ async function deleteFrontend(id, name) {
     currentFrontend = null;
     loadFrontends();
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════ MONITORING ══════════════════════════
+let currentTrace = null;
+
+async function loadMonitoring() {
+  setActions('');
+  try {
+    const [summary, anomalies] = await Promise.all([
+      GET('/admin/api/monitoring/summary').catch(() => ({active_anomalies:0, total_traces:0, recent_traces_1h:0, function_stats:[]})),
+      GET('/admin/api/anomalies').catch(() => []),
+    ]);
+
+    const statsHtml = `<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="stat-card">
+        <div class="stat-label">Active Anomalies</div>
+        <div class="stat-value" style="color:${summary.active_anomalies > 0 ? 'var(--danger)' : 'var(--success)'}">${summary.active_anomalies}</div>
+        <div class="stat-sub">Unresolved</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Traces</div>
+        <div class="stat-value">${summary.total_traces}</div>
+        <div class="stat-sub">All time</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Traces (1h)</div>
+        <div class="stat-value">${summary.recent_traces_1h}</div>
+        <div class="stat-sub">Last hour</div>
+      </div>
+    </div>`;
+
+    const anomalyHtml = anomalies.length === 0
+      ? `<div class="empty-state" style="padding:24px"><div class="empty-icon">✓</div><div class="empty-title" style="color:var(--success)">No active anomalies</div></div>`
+      : anomalies.map(a => `<div class="anomaly-card ${esc(a.severity)}">
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span class="badge badge-${a.severity==='critical'?'red':a.severity==='warning'?'yellow':'blue'}">${esc(a.severity)}</span>
+              <span style="font-size:11px;color:var(--text-3);font-family:'JetBrains Mono',monospace">${esc(a.anomaly_type)}</span>
+              <span style="font-size:11px;color:var(--text-3);margin-left:auto">${fmtDatetime(a.detected_at)}</span>
+            </div>
+            <div style="font-size:13px;color:var(--text)">${esc(a.message)}</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="resolveAnomaly('${esc(a.id)}')">Resolve</button>
+        </div>`).join('');
+
+    const fnStatsRows = (summary.function_stats || []).length === 0
+      ? `<tr><td colspan="4" style="text-align:center;color:var(--text-3);padding:20px">No function invocations in the last 24h</td></tr>`
+      : summary.function_stats.map(f => {
+          const rate = f.success_rate.toFixed(1);
+          const rateColor = f.success_rate >= 95 ? 'var(--success)' : f.success_rate >= 80 ? 'var(--warning)' : 'var(--danger)';
+          return `<tr>
+            <td style="color:var(--text);font-weight:500">${esc(f.function_name)}</td>
+            <td>${f.total_invocations}</td>
+            <td style="color:${rateColor};font-weight:600">${rate}%</td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${f.avg_execution_ms != null ? Math.round(f.avg_execution_ms)+'ms' : '—'}</td>
+          </tr>`;
+        }).join('');
+
+    document.getElementById('content').innerHTML = statsHtml + `
+      <div class="monitor-grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Active Anomalies</span>
+            <span class="badge ${anomalies.length > 0 ? 'badge-red' : 'badge-green'}">${anomalies.length}</span>
+          </div>
+          <div class="card-body" style="padding:12px">${anomalyHtml}</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Function Health (24h)</span>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Function</th><th>Invocations</th><th>Success Rate</th><th>Avg Latency</th></tr></thead>
+            <tbody>${fnStatsRows}</tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Recent Traces</span>
+          <button class="btn btn-ghost btn-sm" onclick="navigate('traces')">View all →</button>
+        </div>
+        <div id="monitor-traces-preview"><div class="loading"><div class="spin"></div> Loading…</div></div>
+      </div>`;
+
+    // Load recent traces preview
+    const traces = await GET('/admin/api/traces?limit=5').catch(() => []);
+    const traceRows = traces.length === 0
+      ? `<div style="padding:20px;text-align:center;color:var(--text-3)">No traces yet. Invoke a function to generate traces.</div>`
+      : `<div class="table-wrap"><table>
+          <thead><tr><th>Trace ID</th><th>Type</th><th>Ref</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead>
+          <tbody>${traces.map(t => `<tr style="cursor:pointer" onclick="openTrace(${JSON.stringify(t)})">
+            <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text)">${esc(t.id.slice(0,12))}…</td>
+            <td>${traceTypeBadge(t.root_type)}</td>
+            <td style="font-size:12px;color:var(--text-2)">${esc(t.root_ref||'—')}</td>
+            <td>${traceStatusBadge(t.status)}</td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${t.duration_ms != null ? t.duration_ms+'ms' : '—'}</td>
+            <td style="color:var(--text-2)">${fmtDatetime(t.started_at)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`;
+    document.getElementById('monitor-traces-preview').innerHTML = traceRows;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+async function resolveAnomaly(id) {
+  try {
+    await req('POST', `/admin/api/anomalies/${id}/resolve`);
+    toast('Anomaly resolved');
+    loadMonitoring();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════ TRACES ═══════════════════════════════
+
+async function loadTraces() {
+  if (currentTrace) {
+    await loadTraceDetail(currentTrace);
+    return;
+  }
+  setActions('');
+  try {
+    const traces = await GET('/admin/api/traces?limit=100');
+    if (!traces || traces.length === 0) {
+      document.getElementById('content').innerHTML = `<div class="empty-state">
+        <div class="empty-icon">〜</div>
+        <div class="empty-title">No traces yet</div>
+        <div class="empty-text">Invoke a function to generate distributed traces. Each invocation creates a trace showing every operation in the call chain.</div>
+      </div>`;
+      return;
+    }
+    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+      <table>
+        <thead><tr><th>Trace ID</th><th>Type</th><th>Ref / Function</th><th>Events</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead>
+        <tbody>${traces.map(t => `<tr style="cursor:pointer" onclick="openTrace(${JSON.stringify(t)})">
+          <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary)">${esc(t.id.slice(0,14))}…</td>
+          <td>${traceTypeBadge(t.root_type)}</td>
+          <td style="font-size:12px;color:var(--text)">${esc(t.root_ref||'—')}</td>
+          <td style="color:var(--text-2)">${t.event_count}</td>
+          <td>${traceStatusBadge(t.status)}</td>
+          <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${t.duration_ms != null ? t.duration_ms+'ms' : '—'}</td>
+          <td style="color:var(--text-2)">${fmtDatetime(t.started_at)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div></div>`;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+function openTrace(trace) {
+  currentTrace = trace;
+  loadTraceDetail(trace);
+}
+
+function closeTrace() {
+  currentTrace = null;
+  loadTraces();
+}
+
+async function loadTraceDetail(trace) {
+  setActions(`<button class="btn btn-ghost btn-sm" onclick="closeTrace()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+    All Traces
+  </button>`);
+  document.getElementById('page-title').textContent = 'Traces';
+  try {
+    const detail = await GET(`/admin/api/traces/${trace.id}`);
+    const t = detail.trace;
+    const events = detail.events || [];
+
+    const breadcrumb = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:16px;font-size:13px;color:var(--text-2)">
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="closeTrace()">Traces</button>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text)">${esc(t.id.slice(0,20))}…</span>
+    </div>`;
+
+    const metaCard = `<div class="card" style="margin-bottom:16px">
+      <div class="card-body" style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px">
+        <div><div class="stat-label">Status</div><div style="margin-top:6px">${traceStatusBadge(t.status)}</div></div>
+        <div><div class="stat-label">Type</div><div style="margin-top:6px">${traceTypeBadge(t.root_type)}</div></div>
+        <div><div class="stat-label">Ref</div><div style="margin-top:6px;font-size:13px;color:var(--text)">${esc(t.root_ref||'—')}</div></div>
+        <div><div class="stat-label">Duration</div><div style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:14px">${t.duration_ms != null ? t.duration_ms+'ms' : '—'}</div></div>
+        <div><div class="stat-label">Spans</div><div style="margin-top:6px;font-size:18px;font-weight:700">${events.length}</div></div>
+      </div>
+    </div>`;
+
+    const waterfallHtml = buildWaterfall(t, events);
+
+    const legendHtml = `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:11px;color:var(--text-2)">
+      ${[['function_invoke','#6366f1'],['fn_invoke_child','#a855f7'],['table_write','#f59e0b'],['bucket_write','#06b6d4'],['http_fetch','#3b82f6'],['flag_eval','#8b5cf6']].map(([type,color]) =>
+        `<span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:${color};display:inline-block"></span>${type}</span>`
+      ).join('')}
+    </div>`;
+
+    document.getElementById('content').innerHTML = breadcrumb + metaCard + `
+      <div class="card">
+        <div class="card-header"><span class="card-title">Span Waterfall</span></div>
+        <div class="card-body">
+          ${legendHtml}
+          <div class="waterfall-wrap">${waterfallHtml}</div>
+        </div>
+      </div>`;
+  } catch(err) {
+    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+  }
+}
+
+function buildWaterfall(trace, events) {
+  if (events.length === 0) {
+    return `<div style="text-align:center;padding:24px;color:var(--text-3)">No span events recorded for this trace.</div>`;
+  }
+  const traceStart = new Date(trace.started_at).getTime();
+  const traceEnd = trace.completed_at ? new Date(trace.completed_at).getTime() : new Date(events[events.length-1].started_at).getTime() + (events[events.length-1].duration_ms || 100);
+  const totalDur = Math.max(traceEnd - traceStart, 1);
+
+  const typeColors = {function_invoke:'#6366f1',fn_invoke_child:'#a855f7',table_write:'#f59e0b',bucket_write:'#06b6d4',http_fetch:'#3b82f6',flag_eval:'#8b5cf6',custom_metric:'#10b981'};
+
+  const rows = events.map(ev => {
+    const evStart = new Date(ev.started_at).getTime();
+    const durMs = ev.duration_ms || 1;
+    const leftPct = Math.max(0, Math.min(99, (evStart - traceStart) / totalDur * 100));
+    const widthPct = Math.max(0.5, Math.min(100 - leftPct, durMs / totalDur * 100));
+    const color = typeColors[ev.event_type] || '#64748b';
+    const statusDot = ev.status === 'error' ? '🔴 ' : '';
+    let meta = {};
+    try { meta = JSON.parse(ev.metadata || '{}'); } catch(_) {}
+    const metaStr = Object.entries(meta).map(([k,v]) => `${k}: ${v}`).join(' · ');
+    return `<div class="waterfall-row" title="${esc(metaStr)}">
+      <div class="waterfall-label">
+        <div class="span-type" style="color:${color}">${statusDot}${esc(ev.event_type)}</div>
+        <div style="font-size:10px;color:var(--text-3);margin-top:2px">${esc(metaStr.slice(0,40))}${metaStr.length > 40 ? '…' : ''}</div>
+      </div>
+      <div class="waterfall-track">
+        <div class="waterfall-bar" style="left:${leftPct.toFixed(1)}%;width:${widthPct.toFixed(1)}%;background:${color}"
+             onclick="showSpanMeta(${esc(JSON.stringify(meta))},${esc(JSON.stringify(ev.event_type))})"></div>
+      </div>
+      <div class="waterfall-ms">${durMs}ms</div>
+    </div>`;
+  });
+
+  return rows.join('');
+}
+
+function showSpanMeta(meta, eventType) {
+  const entries = Object.entries(meta);
+  if (entries.length === 0) { toast('No metadata for this span', 'info'); return; }
+  const body = `<table style="width:100%;font-size:13px">
+    ${entries.map(([k,v]) => `<tr><td style="color:var(--text-3);padding:6px 12px 6px 0;width:40%">${esc(k)}</td><td style="color:var(--text);font-family:'JetBrains Mono',monospace">${esc(String(v))}</td></tr>`).join('')}
+  </table>`;
+  openModal('Span: ' + eventType, body);
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+function fmtDatetime(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  return d.toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+function traceTypeBadge(type) {
+  const map = {http_invoke:'badge-purple',cron:'badge-blue',nats:'badge-yellow',http_trigger:'badge-green'};
+  return `<span class="badge ${map[type]||'badge-blue'}">${esc(type||'—')}</span>`;
+}
+
+function traceStatusBadge(s) {
+  const map = {running:'badge-yellow',success:'badge-green',error:'badge-red'};
+  return `<span class="badge ${map[s]||'badge-blue'}">${esc(s||'unknown')}</span>`;
+}
+
+// ═══════════════════════ FUNCTION METRICS TAB ════════════════
+async function loadFunctionMetrics(fnId) {
+  const container = document.getElementById('fn-metrics-tab');
+  if (!container) return;
+  container.innerHTML = '<div class="loading"><div class="spin"></div> Loading…</div>';
+  try {
+    const data = await GET(`/admin/api/functions/${fnId}/metrics`);
+    const metrics = data.metrics || [];
+    const series = data.series || [];
+    if (metrics.length === 0) {
+      container.innerHTML = `<div class="empty-state" style="padding:32px">
+        <div class="empty-icon">📊</div>
+        <div class="empty-title">No custom metrics yet</div>
+        <div class="empty-text">Call <code style="color:var(--primary)">fnruntime.PublishMetric(name, value, tags)</code> from within your function to record custom metrics.</div>
+      </div>`;
+      return;
+    }
+
+    const seriesHtml = series.map(s => {
+      const pts = s.points.slice(0, 30).reverse();
+      const maxVal = Math.max(...pts.map(p => p.value), 1);
+      const bars = pts.map(p => {
+        const h = Math.max(2, Math.round(p.value / maxVal * 38));
+        return `<div class="metric-sparkline-bar" style="height:${h}px" title="${p.value}"></div>`;
+      }).join('');
+      const last = s.points[0];
+      return `<div class="card" style="margin-bottom:12px">
+        <div class="card-body" style="padding:14px 16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <span style="font-weight:600;font-size:13px">${esc(s.name)}</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:var(--primary)">${last ? last.value.toFixed(2) : '—'}</span>
+          </div>
+          <div class="metric-sparkline">${bars}</div>
+          <div style="font-size:10px;color:var(--text-3);margin-top:4px">${s.points.length} data points · last ${fmtDatetime(last && last.recorded_at)}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    const recentRows = metrics.slice(0, 50).map(m => {
+      let tagsStr = '';
+      try { const t = JSON.parse(m.tags||'{}'); tagsStr = Object.entries(t).map(([k,v])=>`${k}=${v}`).join(', '); } catch(_){}
+      return `<tr>
+        <td style="font-weight:500;color:var(--text)">${esc(m.metric_name)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--primary)">${m.metric_value}</td>
+        <td style="font-size:11px;color:var(--text-3)">${esc(tagsStr||'—')}</td>
+        <td style="color:var(--text-2)">${fmtDatetime(m.recorded_at)}</td>
+      </tr>`;
+    }).join('');
+
+    container.innerHTML = seriesHtml + `<div class="card">
+      <div class="card-header"><span class="card-title">Recent Events</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Metric</th><th>Value</th><th>Tags</th><th>Recorded</th></tr></thead>
+        <tbody>${recentRows}</tbody>
+      </table></div>
+    </div>`;
+  } catch(e) {
+    container.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(e.message)}</div>`;
+  }
 }
 
 // ═══════════════════════ UTILS ════════════════════════════════
