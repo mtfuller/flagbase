@@ -41,6 +41,7 @@ func migrateAdditive(db *sql.DB) error {
 		`ALTER TABLE function_invocations ADD COLUMN host_calls INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE function_invocations ADD COLUMN output_size_bytes INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE function_invocations ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE function_versions ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {

@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -49,6 +51,7 @@ type FunctionVersion struct {
 	ID         string    `json:"id"`
 	FunctionID string    `json:"function_id"`
 	Version    int       `json:"version"`
+	Source     string    `json:"source,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
@@ -208,7 +211,7 @@ func (s *Store) DeployVersion(ctx context.Context, id string, wasmBytes []byte) 
 // ListVersions returns all deployment versions for a function, oldest first.
 func (s *Store) ListVersions(ctx context.Context, functionID string) ([]FunctionVersion, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, function_id, version, created_at
+		SELECT id, function_id, version, source, created_at
 		FROM function_versions WHERE function_id = ?
 		ORDER BY version ASC`, functionID)
 	if err != nil {
@@ -218,7 +221,7 @@ func (s *Store) ListVersions(ctx context.Context, functionID string) ([]Function
 	var versions []FunctionVersion
 	for rows.Next() {
 		var v FunctionVersion
-		if err := rows.Scan(&v.ID, &v.FunctionID, &v.Version, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.FunctionID, &v.Version, &v.Source, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		versions = append(versions, v)
@@ -227,6 +230,19 @@ func (s *Store) ListVersions(ctx context.Context, functionID string) ([]Function
 		versions = []FunctionVersion{}
 	}
 	return versions, nil
+}
+
+// GetVersion returns a single version record by ID, including source snapshot.
+func (s *Store) GetVersion(ctx context.Context, functionID, versionID string) (*FunctionVersion, error) {
+	var v FunctionVersion
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, function_id, version, source, created_at
+		FROM function_versions WHERE id = ? AND function_id = ?`,
+		versionID, functionID).Scan(&v.ID, &v.FunctionID, &v.Version, &v.Source, &v.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &v, err
 }
 
 // InvokeStream executes a ready function, writing its stdout output to w as
@@ -255,7 +271,7 @@ func (s *Store) InvokeStream(ctx context.Context, id string, timeout time.Durati
 		invokeErr = s.invokeWASMStream(ctx, fn, invID, timeout, mw, &m)
 	case compiler.RuntimeJS:
 		var out []byte
-		out, invokeErr = s.invokeJS(fn, timeout)
+		out, invokeErr = s.invokeJS(ctx, fn, timeout)
 		if invokeErr == nil {
 			_, invokeErr = w.Write(out)
 			capBuf.Write(out) //nolint:errcheck
@@ -365,7 +381,7 @@ func (s *Store) Invoke(ctx context.Context, id string, timeout time.Duration) ([
 	case compiler.RuntimeWASM:
 		output, invokeErr = s.invokeWASM(ctx, fn, invID, timeout, &m)
 	case compiler.RuntimeJS:
-		output, invokeErr = s.invokeJS(fn, timeout)
+		output, invokeErr = s.invokeJS(ctx, fn, timeout)
 	default:
 		invokeErr = fmt.Errorf("unknown runtime: %s", fn.Runtime)
 	}
@@ -516,7 +532,7 @@ func (s *Store) buildHostDeps(ctx context.Context, fnID, invID string) *HostDeps
 	}
 }
 
-func (s *Store) invokeJS(fn *Function, timeout time.Duration) ([]byte, error) {
+func (s *Store) invokeJS(ctx context.Context, fn *Function, timeout time.Duration) ([]byte, error) {
 	vm := goja.New()
 
 	var out strings.Builder
@@ -531,6 +547,8 @@ func (s *Store) invokeJS(fn *Function, timeout time.Duration) ([]byte, error) {
 			out.WriteByte('\n')
 		},
 	})
+
+	s.buildJSHostObject(ctx, vm)
 
 	done := make(chan error, 1)
 	go func() {
@@ -561,6 +579,275 @@ func (s *Store) invokeJS(fn *Function, timeout time.Duration) ([]byte, error) {
 	}
 
 	return []byte(out.String()), nil
+}
+
+// buildJSHostObject injects the flagbase SDK namespace into a goja VM, giving
+// JavaScript functions the same capabilities as WASM host functions.
+func (s *Store) buildJSHostObject(ctx context.Context, vm *goja.Runtime) {
+	flagObj := map[string]interface{}{
+		"evaluate": func(key string) bool {
+			if s.flags == nil {
+				return false
+			}
+			return s.flags.EvaluateBool(key, callerEvalCtx(ctx))
+		},
+		"variant": func(key string) string {
+			if s.flags == nil {
+				return "false"
+			}
+			return s.flags.EvaluateVariant(key, callerEvalCtx(ctx))
+		},
+	}
+
+	bucketObj := map[string]interface{}{
+		"get": func(bucket, key string) interface{} {
+			if s.store == nil {
+				return nil
+			}
+			rc, err := s.store.GetObject(ctx, bucket, key)
+			if err != nil {
+				return nil
+			}
+			defer rc.Close()
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil
+			}
+			return string(data)
+		},
+		"put": func(bucket, key, data string) bool {
+			if s.store == nil {
+				return false
+			}
+			return s.store.PutObject(ctx, bucket, key, strings.NewReader(data)) == nil
+		},
+		"delete": func(bucket, key string) bool {
+			if s.store == nil {
+				return false
+			}
+			return s.store.DeleteObject(ctx, bucket, key) == nil
+		},
+		"list": func(bucket string) []string {
+			if s.store == nil {
+				return []string{}
+			}
+			objs, err := s.store.ListObjects(ctx, bucket)
+			if err != nil {
+				return []string{}
+			}
+			return objs
+		},
+	}
+
+	tableObj := map[string]interface{}{
+		"get": func(tableKey, id string) interface{} {
+			if s.tables == nil {
+				return nil
+			}
+			rec, err := s.tables.GetRecord(tableKey, id)
+			if err != nil || rec == nil {
+				return nil
+			}
+			return rec
+		},
+		"put": func(tableKey string, data map[string]interface{}) interface{} {
+			if s.tables == nil {
+				return nil
+			}
+			flagCtx, _ := ctx.Value(flagCtxKey{}).(string)
+			var rec *table.Record
+			var err error
+			if flagCtx != "" {
+				rec, err = s.tables.InsertRecordFlagged(tableKey, data, flagCtx)
+			} else {
+				rec, err = s.tables.InsertRecord(tableKey, data)
+			}
+			if err != nil {
+				return nil
+			}
+			return rec
+		},
+		"delete": func(tableKey, id string) bool {
+			if s.tables == nil {
+				return false
+			}
+			return s.tables.DeleteRecord(tableKey, id) == nil
+		},
+		"query": func(tableKey string, opts map[string]interface{}) interface{} {
+			if s.tables == nil {
+				return []interface{}{}
+			}
+			qo := table.QueryOptions{}
+			if opts != nil {
+				if v, ok := opts["limit"].(int64); ok {
+					qo.Limit = int(v)
+				}
+				if v, ok := opts["offset"].(int64); ok {
+					qo.Offset = int(v)
+				}
+			}
+			recs, err := s.tables.QueryRecords(tableKey, qo)
+			if err != nil {
+				return []interface{}{}
+			}
+			return recs
+		},
+	}
+
+	fnObj := map[string]interface{}{
+		"invoke": func(id string) string {
+			out, err := s.Invoke(ctx, id, 30*time.Second)
+			if err != nil {
+				return ""
+			}
+			return string(out)
+		},
+	}
+
+	httpObj := map[string]interface{}{
+		"fetch": func(reqObj map[string]interface{}) map[string]interface{} {
+			method, _ := reqObj["method"].(string)
+			url, _ := reqObj["url"].(string)
+			bodyStr, _ := reqObj["body"].(string)
+			if method == "" {
+				method = "GET"
+			}
+			httpReq, err := http.NewRequestWithContext(ctx, method, url, strings.NewReader(bodyStr))
+			if err != nil {
+				return map[string]interface{}{"status": 0, "body": err.Error(), "headers": map[string]string{}}
+			}
+			if hdrs, ok := reqObj["headers"].(map[string]interface{}); ok {
+				for k, v := range hdrs {
+					if vs, ok := v.(string); ok {
+						httpReq.Header.Set(k, vs)
+					}
+				}
+			}
+			client := &http.Client{Timeout: 15 * time.Second}
+			resp, err := client.Do(httpReq)
+			if err != nil {
+				return map[string]interface{}{"status": 0, "body": err.Error(), "headers": map[string]string{}}
+			}
+			defer resp.Body.Close()
+			respBytes, _ := io.ReadAll(resp.Body)
+			hdrs := map[string]string{}
+			for k, vs := range resp.Header {
+				if len(vs) > 0 {
+					hdrs[k] = vs[0]
+				}
+			}
+			return map[string]interface{}{
+				"status":  resp.StatusCode,
+				"body":    string(respBytes),
+				"headers": hdrs,
+			}
+		},
+	}
+
+	metricsObj := map[string]interface{}{
+		"publish": func(name string, value float64, tags map[string]interface{}) bool {
+			if s.db == nil {
+				return false
+			}
+			tagsJSON, _ := json.Marshal(tags)
+			_, err := s.db.ExecContext(ctx, `
+				INSERT INTO function_custom_metrics (id, function_id, metric_name, metric_value, tags)
+				VALUES (?, '', ?, ?, ?)`,
+				fmt.Sprintf("%d", time.Now().UnixNano()), name, value, string(tagsJSON))
+			return err == nil
+		},
+	}
+
+	contextObj := map[string]interface{}{
+		"caller": func() map[string]interface{} {
+			cc, _ := ctx.Value(callerCtxKey{}).(CallerContext)
+			return map[string]interface{}{
+				"userId":   cc.UserID,
+				"role":     cc.Role,
+				"tenantID": cc.TenantID,
+				"email":    cc.Email,
+				"groups":   cc.Groups,
+			}
+		},
+		"event": func() string {
+			if data, ok := ctx.Value(eventPayloadKey{}).([]byte); ok {
+				return string(data)
+			}
+			return ""
+		},
+		"traceId": func() string {
+			return tracing.TraceIDFromCtx(ctx)
+		},
+	}
+
+	_ = vm.Set("flagbase", map[string]interface{}{
+		"flag":    flagObj,
+		"bucket":  bucketObj,
+		"table":   tableObj,
+		"fn":      fnObj,
+		"http":    httpObj,
+		"metrics": metricsObj,
+		"context": contextObj,
+	})
+}
+
+// Update recompiles a JavaScript function from new source and stores a new version.
+func (s *Store) Update(ctx context.Context, id, name, description, source string) (*Function, error) {
+	fn, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("loading function: %w", err)
+	}
+	if fn == nil {
+		return nil, fmt.Errorf("function not found")
+	}
+	if fn.Language != string(compiler.LanguageJavaScript) {
+		return nil, fmt.Errorf("only javascript functions can be edited in the browser; use the CLI for WASM functions")
+	}
+
+	c, err := compilerFor(fn.Language)
+	if err != nil {
+		return nil, err
+	}
+
+	fn.Name = name
+	fn.Description = description
+	fn.Source = source
+
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE functions SET name = ?, description = ?, source = ?, status = 'compiling', error = '', updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`, name, description, source, id)
+	if err != nil {
+		return nil, fmt.Errorf("updating function: %w", err)
+	}
+
+	result, compileErr := c.Compile(source)
+	if compileErr != nil {
+		fn.Status = "error"
+		fn.Error = compileErr.Error()
+		_ = s.updateStatus(ctx, id, "error", compileErr.Error(), "")
+		return fn, nil
+	}
+
+	fn.Runtime = string(result.Runtime)
+	objectName := id + artifactExt(result.Runtime)
+	if err := s.store.PutObject(ctx, functionsBucket, objectName, bytes.NewReader(result.Artifact)); err != nil {
+		fn.Status = "error"
+		fn.Error = fmt.Sprintf("storing artifact: %v", err)
+		_ = s.updateStatus(ctx, id, "error", fn.Error, "")
+		return fn, nil
+	}
+
+	fn.Status = "ready"
+	_ = s.updateStatus(ctx, id, "ready", "", string(result.Runtime))
+	_, _ = s.createVersion(ctx, id)
+	return fn, nil
+}
+
+// InvokeStreamWithEvent executes a function with an event payload, streaming
+// stdout to w in real-time.
+func (s *Store) InvokeStreamWithEvent(ctx context.Context, id string, timeout time.Duration, eventData []byte, w io.Writer) error {
+	ctx = context.WithValue(ctx, eventPayloadKey{}, eventData)
+	return s.InvokeStream(ctx, id, timeout, w)
 }
 
 func (s *Store) insert(ctx context.Context, fn *Function) error {
@@ -607,14 +894,20 @@ func (s *Store) createVersion(ctx context.Context, functionID string) (*Function
 	if err != nil {
 		return nil, fmt.Errorf("generating version id: %w", err)
 	}
+
+	// Snapshot source at deploy time for diff view.
+	var source string
+	_ = s.db.QueryRowContext(ctx, `SELECT source FROM functions WHERE id = ?`, functionID).Scan(&source)
+
 	v := &FunctionVersion{
 		ID:         id,
 		FunctionID: functionID,
 		Version:    maxVersion + 1,
+		Source:     source,
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO function_versions (id, function_id, version) VALUES (?, ?, ?)`,
-		v.ID, v.FunctionID, v.Version)
+		`INSERT INTO function_versions (id, function_id, version, source) VALUES (?, ?, ?, ?)`,
+		v.ID, v.FunctionID, v.Version, v.Source)
 	if err != nil {
 		return nil, fmt.Errorf("inserting version: %w", err)
 	}

@@ -345,3 +345,191 @@ func addZipEntry(zw *zip.Writer, name string, data []byte, mode os.FileMode) {
 	}
 	_, _ = w.Write(data)
 }
+
+// UpdateFunction recompiles a JavaScript function with updated source code.
+func (h *FunctionHandlers) UpdateFunction(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Source      string `json:"source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == "" || req.Source == "" {
+		writeError(w, http.StatusBadRequest, "name and source are required")
+		return
+	}
+	fn, err := h.Functions.Update(r.Context(), id, req.Name, req.Description, req.Source)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, fn)
+}
+
+// GetFunctionVersion returns a single version record including its source snapshot.
+func (h *FunctionHandlers) GetFunctionVersion(w http.ResponseWriter, r *http.Request) {
+	fnID := chi.URLParam(r, "id")
+	versionID := chi.URLParam(r, "versionId")
+	v, err := h.Functions.GetVersion(r.Context(), fnID, versionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if v == nil {
+		writeError(w, http.StatusNotFound, "version not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// flagbaseSDKTypes is the TypeScript ambient declaration for the flagbase JS SDK.
+// Served to Monaco Editor so IntelliSense works in-browser.
+const flagbaseSDKTypes = `
+/** flagbase host SDK — available in every JavaScript function. */
+declare namespace flagbase {
+  namespace flag {
+    /** Evaluate a feature flag and return true/false for the current caller. */
+    function evaluate(key: string): boolean;
+    /** Evaluate a feature flag and return the matched variant key string. */
+    function variant(key: string): string;
+  }
+  namespace bucket {
+    /** Retrieve an object from storage; returns null if not found. */
+    function get(bucket: string, key: string): string | null;
+    /** Store a string value in a bucket. Returns true on success. */
+    function put(bucket: string, key: string, data: string): boolean;
+    /** Delete an object from a bucket. Returns true on success. */
+    function delete(bucket: string, key: string): boolean;
+    /** List all object keys in a bucket. */
+    function list(bucket: string): string[];
+  }
+  namespace table {
+    /** Retrieve a record by ID; returns null if not found. */
+    function get(tableKey: string, id: string): Record<string, unknown> | null;
+    /** Insert or update a record; returns the saved record. */
+    function put(tableKey: string, data: Record<string, unknown>): Record<string, unknown> | null;
+    /** Delete a record by ID. Returns true on success. */
+    function delete(tableKey: string, id: string): boolean;
+    /** Query records with optional filters and pagination. */
+    function query(tableKey: string, opts?: {
+      limit?: number;
+      offset?: number;
+    }): Record<string, unknown>[];
+  }
+  namespace fn {
+    /** Synchronously invoke another function by ID and return its stdout. */
+    function invoke(id: string): string;
+  }
+  namespace http {
+    interface FetchRequest {
+      method: string;
+      url: string;
+      headers?: Record<string, string>;
+      body?: string;
+    }
+    interface FetchResponse {
+      status: number;
+      headers: Record<string, string>;
+      body: string;
+    }
+    /** Make an outbound HTTP request with a 15-second timeout. */
+    function fetch(req: FetchRequest): FetchResponse;
+  }
+  namespace metrics {
+    /** Publish a custom numeric metric observable in the Monitoring dashboard. */
+    function publish(name: string, value: number, tags?: Record<string, string>): boolean;
+  }
+  namespace context {
+    interface CallerContext {
+      userId: string;
+      role: string;
+      tenantID: string;
+      email: string;
+      groups: string[];
+    }
+    /** Return the IAM identity of the user or trigger that invoked this function. */
+    function caller(): CallerContext;
+    /** Return the raw event payload bytes (UTF-8 string) passed to InvokeWithEvent. */
+    function event(): string;
+    /** Return the distributed trace ID for this invocation. */
+    function traceId(): string;
+  }
+}
+
+/** Every JS function must export a handle() entry point. */
+declare function handle(): void;
+
+/** Standard console output — each log line appears in the invocation output. */
+declare const console: {
+  log(...args: unknown[]): void;
+};
+`
+
+// GetFlagbaseSDKTypes serves the TypeScript ambient declarations for the flagbase
+// JS SDK so that Monaco Editor can provide IntelliSense in the browser.
+// No authentication required — the file contains no secrets.
+func (h *FunctionHandlers) GetFlagbaseSDKTypes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/typescript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(flagbaseSDKTypes))
+}
+
+// InvokeFunctionStreamWithEvent streams a function's stdout as SSE, injecting
+// the POST body as the event payload readable via flagbase.context.event().
+func (h *FunctionHandlers) InvokeFunctionStreamWithEvent(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	timeoutSecs := 5
+	if v := r.URL.Query().Get("timeout"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 30 {
+			timeoutSecs = n
+		}
+	}
+
+	eventData, _ := io.ReadAll(r.Body)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(time.Duration(timeoutSecs+10) * time.Second))
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ctx := r.Context()
+	if claims, ok := ctx.Value(iam.UserContextKey).(*iam.Claims); ok {
+		ctx = function.WithCallerContext(ctx, function.CallerContext{
+			UserID:   claims.UserID,
+			Role:     claims.Role,
+			TenantID: claims.TenantID,
+			Email:    claims.Email,
+			Groups:   claims.Groups,
+		})
+	}
+
+	sw := &sseWriter{w: w, flusher: flusher}
+	timeout := time.Duration(timeoutSecs) * time.Second
+	err := h.Functions.InvokeStreamWithEvent(ctx, id, timeout, eventData, sw)
+
+	var finalEvent []byte
+	if err != nil {
+		finalEvent, _ = json.Marshal(map[string]string{"type": "error", "message": err.Error()})
+	} else {
+		finalEvent, _ = json.Marshal(map[string]string{"type": "done"})
+	}
+	fmt.Fprintf(w, "data: %s\n\n", finalEvent)
+	flusher.Flush()
+}

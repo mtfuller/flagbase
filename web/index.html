@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs/loader.js"></script>
 <style>
 :root {
   --bg-base:     #0b0b14;
@@ -1719,6 +1720,205 @@ async function removeMember(groupId, userId, groupName) {
 }
 
 // ═══════════════════════ FUNCTIONS ════════════════════════════
+// ═══════════════════════ MONACO EDITOR ═══════════════════════════════
+let _monacoEditor = null;
+let _monacoReady = false;
+
+function defineFlagbaseTheme() {
+  monaco.editor.defineTheme('flagbase-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'keyword', foreground: 'a78bfa' },
+      { token: 'string', foreground: '86efac' },
+      { token: 'comment', foreground: '6b7280', fontStyle: 'italic' },
+      { token: 'number', foreground: 'fb923c' },
+      { token: 'identifier', foreground: 'e2e8f0' },
+    ],
+    colors: {
+      'editor.background': '#0b0b14',
+      'editor.foreground': '#e2e8f0',
+      'editorLineNumber.foreground': '#3d3d5c',
+      'editorLineNumber.activeForeground': '#6366f1',
+      'editor.lineHighlightBackground': '#121220',
+      'editorIndentGuide.background': '#1a1a2e',
+      'editorIndentGuide.activeBackground': '#252540',
+      'editor.selectionBackground': '#6366f133',
+      'editorCursor.foreground': '#6366f1',
+      'editor.lineHighlightBorder': '#00000000',
+    }
+  });
+}
+
+function mountEditor(containerId, source) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.style.height = 'calc(100vh - 220px)';
+  container.style.minHeight = '300px';
+  if (_monacoEditor) {
+    _monacoEditor.dispose();
+    _monacoEditor = null;
+  }
+  const doMount = () => {
+    _monacoEditor = monaco.editor.create(container, {
+      value: source || '',
+      language: 'javascript',
+      theme: 'flagbase-dark',
+      fontSize: 13,
+      fontFamily: "'JetBrains Mono', monospace",
+      fontLigatures: true,
+      minimap: { enabled: false },
+      lineNumbers: 'on',
+      scrollBeyondLastLine: false,
+      automaticLayout: true,
+      tabSize: 2,
+      insertSpaces: true,
+      wordWrap: 'on',
+      suggestOnTriggerCharacters: true,
+      quickSuggestions: true,
+      parameterHints: { enabled: true },
+      folding: true,
+      renderLineHighlight: 'line',
+      padding: { top: 12, bottom: 12 },
+    });
+  };
+  if (_monacoReady) {
+    doMount();
+  } else {
+    require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' } });
+    require(['vs/editor/editor.main'], () => {
+      fetch('/admin/api/sdk/flagbase.d.ts', { headers: S.token ? { 'Authorization': 'Bearer ' + S.token } : {} })
+        .then(r => r.text())
+        .then(dts => {
+          monaco.languages.typescript.javascriptDefaults.addExtraLib(dts, 'ts:flagbase-sdk.d.ts');
+          monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
+            target: monaco.languages.typescript.ScriptTarget.ES2020,
+            allowNonTsExtensions: true,
+            noLib: false,
+          });
+          defineFlagbaseTheme();
+          _monacoReady = true;
+          doMount();
+        })
+        .catch(() => {
+          defineFlagbaseTheme();
+          _monacoReady = true;
+          doMount();
+        });
+    });
+  }
+}
+
+const JS_STARTER = `function handle() {
+  const caller = flagbase.context.caller();
+  const enabled = flagbase.flag.evaluate('my-feature');
+  if (enabled) {
+    console.log('Feature enabled for ' + caller.userId);
+  } else {
+    console.log('Feature disabled, running default path');
+  }
+}
+`;
+
+function showEditorError(errMsg) {
+  if (!_monacoEditor) return;
+  const model = _monacoEditor.getModel();
+  if (!model) return;
+  monaco.editor.setModelMarkers(model, 'flagbase', [{
+    severity: monaco.MarkerSeverity.Error,
+    message: errMsg,
+    startLineNumber: 1,
+    startColumn: 1,
+    endLineNumber: 1,
+    endColumn: 80,
+  }]);
+}
+
+function clearEditorMarkers() {
+  if (!_monacoEditor) return;
+  const model = _monacoEditor.getModel();
+  if (model) monaco.editor.setModelMarkers(model, 'flagbase', []);
+}
+
+async function saveFnFromEditor(existingId) {
+  const source = _monacoEditor ? _monacoEditor.getValue() : '';
+  const nameEl = document.getElementById('fn-editor-name');
+  const descEl = document.getElementById('fn-editor-desc');
+  const name = nameEl ? nameEl.value.trim() : '';
+  const desc = descEl ? descEl.value.trim() : '';
+  if (!name) { toast('Function name is required', 'error'); return; }
+  if (!source.trim()) { toast('Source code cannot be empty', 'error'); return; }
+
+  const btn = document.getElementById('fn-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  clearEditorMarkers();
+  try {
+    let fn;
+    if (existingId) {
+      fn = await PUT('/admin/api/functions/' + existingId, { name, description: desc, source });
+    } else {
+      fn = await POST('/admin/api/functions', { name, description: desc, language: 'javascript', source });
+    }
+    if (fn.status === 'error') {
+      toast('Compile error: ' + fn.error, 'error');
+      showEditorError(fn.error);
+    } else {
+      toast('Function saved');
+      currentFunction = fn;
+      loadFunctionDetail(fn);
+    }
+  } catch(e) { toast(e.message, 'error'); }
+  finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save & Deploy'; }
+  }
+}
+
+function openNewFunctionEditor() {
+  if (_monacoEditor) { _monacoEditor.dispose(); _monacoEditor = null; }
+  setActions('');
+  document.getElementById('page-title').textContent = 'Functions';
+  document.getElementById('content').innerHTML = `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="closeFunctionDetail()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          Cancel
+        </button>
+        <input id="fn-editor-name" class="form-input" placeholder="Function name" style="width:220px" required>
+        <input id="fn-editor-desc" class="form-input" placeholder="Description (optional)" style="flex:1;min-width:160px">
+        <button id="fn-save-btn" class="btn btn-primary btn-sm" onclick="saveFnFromEditor(null)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          Save &amp; Deploy
+        </button>
+      </div>
+      <div id="fn-editor-container" style="flex:1;border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--border)"></div>
+    </div>`;
+  mountEditor('fn-editor-container', JS_STARTER);
+}
+
+function openEditFunctionEditor(fn) {
+  if (_monacoEditor) { _monacoEditor.dispose(); _monacoEditor = null; }
+  setActions('');
+  document.getElementById('page-title').textContent = 'Functions';
+  document.getElementById('content').innerHTML = `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="openFunctionDetail(currentFunction)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          Cancel
+        </button>
+        <input id="fn-editor-name" class="form-input" placeholder="Function name" style="width:220px" value="${esc(fn.name)}" required>
+        <input id="fn-editor-desc" class="form-input" placeholder="Description (optional)" style="flex:1;min-width:160px" value="${esc(fn.description||'')}">
+        <button id="fn-save-btn" class="btn btn-primary btn-sm" onclick="saveFnFromEditor('${esc(fn.id)}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          Save &amp; Deploy
+        </button>
+      </div>
+      <div id="fn-editor-container" style="flex:1;border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--border)"></div>
+    </div>`;
+  mountEditor('fn-editor-container', fn.source || JS_STARTER);
+}
+
 let currentFunction = null;
 
 function fnDeployGuideHTML() {
@@ -1774,17 +1974,23 @@ async function loadFunctions() {
     await loadFunctionDetail(currentFunction);
     return;
   }
-  setActions(`<button class="btn btn-ghost btn-sm" onclick="showDeployGuide()">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
-    Deploy guide
-  </button>`);
+  setActions(`
+    <button class="btn btn-primary btn-sm" onclick="openNewFunctionEditor()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New JS Function
+    </button>
+    <button class="btn btn-ghost btn-sm" onclick="showDeployGuide()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+      Deploy guide
+    </button>`);
   try {
     const fns = await GET('/admin/api/functions');
     if (!fns || fns.length === 0) {
       document.getElementById('content').innerHTML = `<div class="empty-state">
         <div class="empty-icon">⚡</div>
         <div class="empty-title">No functions deployed yet</div>
-        <div class="empty-text">Use the Flagbase CLI to scaffold, build, and deploy Go functions as sandboxed WASM.</div>
+        <div class="empty-text">Write JavaScript directly in the browser, or use the CLI to build and deploy Go/WASM functions.</div>
+        <button class="btn btn-primary" onclick="openNewFunctionEditor()" style="margin-bottom:16px">Write a JavaScript function</button>
         <div style="text-align:left;max-width:580px;margin:24px auto 0">
           <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
             <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px">Quick start</div>
@@ -1860,6 +2066,10 @@ async function loadFunctionDetail(fn) {
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
       All Functions
     </button>
+    ${fn.language === 'javascript' ? `<button class="btn btn-ghost btn-sm" onclick="openEditFunctionEditor(currentFunction)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Edit Source
+    </button>` : ''}
     ${fn.status === 'ready' ? `<button class="btn btn-primary btn-sm" onclick="invokeFn('${esc(fn.id)}','${esc(fn.name)}')">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       Invoke
@@ -2069,7 +2279,7 @@ function fnStatusBadge(status, errMsg) {
 function invokeFn(id, name) {
   openModal(`Invoke: ${esc(name)}`, `
     <div class="modal-body">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
         <label class="form-label" style="margin:0;white-space:nowrap">Timeout</label>
         <input class="form-input" id="fn-timeout" type="number" value="5" min="1" max="30" style="width:72px">
         <span style="font-size:12px;color:var(--text-3)">seconds</span>
@@ -2078,7 +2288,14 @@ function invokeFn(id, name) {
           Run
         </button>
       </div>
-      <pre id="fn-output" style="background:#0a0a12;border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;min-height:120px;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6"></pre>
+      <div style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <label class="form-label" style="margin:0;font-size:11px">Event Payload (JSON, optional)</label>
+          <span style="font-size:11px;color:var(--text-3)">readable via <code style="color:var(--primary)">flagbase.context.event()</code></span>
+        </div>
+        <textarea id="fn-event-payload" class="form-input" rows="3" placeholder='{"key": "value"}' style="font-family: JetBrains Mono, monospace; font-size: 12px; resize: vertical;"></textarea>
+      </div>
+      <pre id="fn-output" style="background:#0a0a12;border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#a5b4fc;min-height:120px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6"></pre>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
@@ -2087,6 +2304,8 @@ function invokeFn(id, name) {
 
 async function runFnStream(id) {
   const timeout = parseInt(document.getElementById('fn-timeout').value, 10) || 5;
+  const eventPayloadEl = document.getElementById('fn-event-payload');
+  const eventPayload = eventPayloadEl ? eventPayloadEl.value.trim() : '';
   const btn = document.getElementById('fn-run-btn');
   const out = document.getElementById('fn-output');
 
@@ -2096,9 +2315,18 @@ async function runFnStream(id) {
   out.textContent = '';
 
   try {
-    const res = await fetch(`/admin/api/functions/${id}/invoke/stream?timeout=${timeout}`, {
-      headers: { 'Authorization': 'Bearer ' + S.token }
-    });
+    let res;
+    if (eventPayload) {
+      res = await fetch(`/admin/api/functions/${id}/invoke/stream?timeout=${timeout}`, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + S.token, 'Content-Type': 'text/plain' },
+        body: eventPayload,
+      });
+    } else {
+      res = await fetch(`/admin/api/functions/${id}/invoke/stream?timeout=${timeout}`, {
+        headers: { 'Authorization': 'Bearer ' + S.token }
+      });
+    }
     if (!res.ok) {
       out.style.color = 'var(--danger)';
       out.textContent = `HTTP ${res.status}: ${await res.text()}`;
