@@ -507,6 +507,13 @@ function fmtBytes(n) {
 // ═══════════════════════ ROUTER ══════════════════════════════
 const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', identity:'Identity', functions:'Functions', tables:'Tables', frontends:'Frontends', monitoring:'Monitoring', traces:'Traces'};
 
+let _navGen = 0;
+
+function setContent(gen, html) {
+  if (gen !== _navGen) return;
+  document.getElementById('content').innerHTML = html;
+}
+
 function navigate(page) {
   if (page !== 'storage') currentBucket = null;
   if (page !== 'tables') currentTable = null;
@@ -524,6 +531,7 @@ function navigate(page) {
 }
 
 function loadPage(page) {
+  const gen = ++_navGen;
   const c = document.getElementById('content');
   c.innerHTML = '<div class="loading"><div class="spin"></div> Loading…</div>';
   ({
@@ -537,7 +545,7 @@ function loadPage(page) {
     frontends: loadFrontends,
     monitoring: loadMonitoring,
     traces: loadTraces,
-  }[page] || loadDashboard)();
+  }[page] || loadDashboard)(gen);
 }
 
 // ═══════════════════════ AUTH ════════════════════════════════
@@ -626,7 +634,7 @@ document.getElementById('login-form').addEventListener('submit', async e => {
 });
 
 // ═══════════════════════ DASHBOARD ════════════════════════════
-async function loadDashboard() {
+async function loadDashboard(gen) {
   setActions('');
   try {
     const [flags, users, routes, metrics] = await Promise.all([
@@ -651,7 +659,7 @@ async function loadDashboard() {
       metricsHTML = `<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">No metrics yet</div><div class="empty-text">Events from your SDK clients will appear here.</div></div>`;
     }
 
-    document.getElementById('content').innerHTML = `
+    setContent(gen, `
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">Feature Flags</div>
@@ -680,9 +688,9 @@ async function loadDashboard() {
           <span class="badge badge-blue">${(metrics||[]).length} flag${(metrics||[]).length !== 1 ? 's' : ''} tracked</span>
         </div>
         <div class="table-wrap">${metricsHTML}</div>
-      </div>`;
+      </div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error loading dashboard</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error loading dashboard</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -690,7 +698,7 @@ async function loadDashboard() {
 let flagRules = [];
 let currentEditFlag = null; // flag currently open in the edit modal
 
-async function loadFlags() {
+async function loadFlags(gen) {
   setActions(`<button class="btn btn-primary btn-sm" onclick="openFlagModal()">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     New Flag
@@ -698,22 +706,23 @@ async function loadFlags() {
   try {
     const flags = await GET('/api/v1/flags');
     if (!flags || flags.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      setContent(gen, `<div class="empty-state">
         <div class="empty-icon">🚩</div>
         <div class="empty-title">No feature flags yet</div>
         <div class="empty-text">Create your first flag to start controlling features in production.</div>
         <button class="btn btn-primary" onclick="openFlagModal()">Create your first flag</button>
-      </div>`;
+      </div>`);
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card">
+    setContent(gen, `<div class="card">
       <div class="table-wrap">
         <table>
           <thead><tr><th>Key</th><th>Name</th><th>Lifecycle</th><th>Enabled</th><th>Rules</th><th>Overrides</th><th>Updated</th><th></th></tr></thead>
           <tbody id="flags-tbody"></tbody>
         </table>
       </div>
-    </div>`;
+    </div>`);
+    if (gen !== _navGen) return;
     document.getElementById('flags-tbody').innerHTML = flags.map(f => `<tr>
       <td class="text-mono">${esc(f.key)}</td>
       <td class="text-primary">${esc(f.name)}</td>
@@ -732,7 +741,7 @@ async function loadFlags() {
       </td>
     </tr>`).join('');
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -1060,7 +1069,7 @@ async function confirmDeleteFlag(key) {
 }
 
 // ═══════════════════════ GATEWAY ══════════════════════════════
-async function loadGateway() {
+async function loadGateway(gen) {
   setActions(`<button class="btn btn-primary btn-sm" onclick="openRouteModal()">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     New Route
@@ -1068,15 +1077,15 @@ async function loadGateway() {
   try {
     const routes = await GET('/api/v1/gateway/routes');
     if (!routes || routes.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      setContent(gen, `<div class="empty-state">
         <div class="empty-icon">🌐</div>
         <div class="empty-title">No gateway routes</div>
         <div class="empty-text">Register a route to start proxying traffic through feature flags.</div>
         <button class="btn btn-primary" onclick="openRouteModal()">Register a route</button>
-      </div>`;
+      </div>`);
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+    setContent(gen, `<div class="card"><div class="table-wrap">
       <table>
         <thead><tr><th>Pattern</th><th>Backend URL</th><th>Flag Gate</th><th></th></tr></thead>
         <tbody>${routes.map(r => `<tr>
@@ -1090,9 +1099,9 @@ async function loadGateway() {
           </td>
         </tr>`).join('')}</tbody>
       </table>
-    </div></div>`;
+    </div></div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -1161,15 +1170,15 @@ async function confirmDeleteRoute(id) {
 // ═══════════════════════ STORAGE ══════════════════════════════
 let currentBucket = null;
 
-async function loadStorage() {
+async function loadStorage(gen) {
   if (currentBucket) {
-    await loadObjects(currentBucket);
+    await loadObjects(currentBucket, gen);
   } else {
-    await loadBuckets();
+    await loadBuckets(gen);
   }
 }
 
-async function loadBuckets() {
+async function loadBuckets(gen) {
   setActions(`<button class="btn btn-primary btn-sm" onclick="openBucketModal()">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     New Bucket
@@ -1178,15 +1187,15 @@ async function loadBuckets() {
   try {
     const buckets = await GET('/admin/api/storage/buckets');
     if (!buckets || buckets.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      setContent(gen, `<div class="empty-state">
         <div class="empty-icon">🗄️</div>
         <div class="empty-title">No storage buckets</div>
         <div class="empty-text">Create a bucket to store objects using the S3-compatible adapter interface.</div>
         <button class="btn btn-primary" onclick="openBucketModal()">Create bucket</button>
-      </div>`;
+      </div>`);
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+    setContent(gen, `<div class="card"><div class="table-wrap">
       <table>
         <thead><tr><th>Bucket Name</th><th>Path</th><th></th></tr></thead>
         <tbody>${buckets.map(b => `<tr>
@@ -1204,9 +1213,9 @@ async function loadBuckets() {
           </td>
         </tr>`).join('')}</tbody>
       </table>
-    </div></div>`;
+    </div></div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -1220,7 +1229,7 @@ function closeBucket() {
   loadBuckets();
 }
 
-async function loadObjects(bucket) {
+async function loadObjects(bucket, gen) {
   document.getElementById('page-title').textContent = 'Storage Buckets';
   setActions(`
     <button class="btn btn-ghost btn-sm" onclick="closeBucket()">
@@ -1243,15 +1252,15 @@ async function loadObjects(bucket) {
     </div>`;
 
     if (!objects || objects.length === 0) {
-      document.getElementById('content').innerHTML = breadcrumb + `<div class="empty-state">
+      setContent(gen, breadcrumb + `<div class="empty-state">
         <div class="empty-icon">📁</div>
         <div class="empty-title">No objects in <code style="font-size:14px">${esc(bucket)}</code></div>
         <div class="empty-text">Upload a file using the button above.</div>
-      </div>`;
+      </div>`);
       return;
     }
 
-    document.getElementById('content').innerHTML = breadcrumb + `<div class="card"><div class="table-wrap">
+    setContent(gen, breadcrumb + `<div class="card"><div class="table-wrap">
       <table>
         <thead><tr><th>Object Name</th><th></th></tr></thead>
         <tbody>${objects.map(obj => `<tr>
@@ -1266,9 +1275,9 @@ async function loadObjects(bucket) {
           </td>
         </tr>`).join('')}</tbody>
       </table>
-    </div></div>`;
+    </div></div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -1356,7 +1365,7 @@ async function confirmDeleteBucket(name) {
 // ═══════════════════════ IDENTITY ═════════════════════════════
 let identityTab = 'users';
 
-async function loadIdentity() {
+async function loadIdentity(gen) {
   setActions('');
   identityTab = identityTab || 'users';
   renderIdentityShell();
@@ -1969,9 +1978,9 @@ function copyToken() {
   navigator.clipboard.writeText(S.token).then(() => toast('Token copied to clipboard'));
 }
 
-async function loadFunctions() {
+async function loadFunctions(gen) {
   if (currentFunction) {
-    await loadFunctionDetail(currentFunction);
+    await loadFunctionDetail(currentFunction, gen);
     return;
   }
   setActions(`
@@ -1986,7 +1995,7 @@ async function loadFunctions() {
   try {
     const fns = await GET('/admin/api/functions');
     if (!fns || fns.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      setContent(gen, `<div class="empty-state">
         <div class="empty-icon">⚡</div>
         <div class="empty-title">No functions deployed yet</div>
         <div class="empty-text">Write JavaScript directly in the browser, or use the CLI to build and deploy Go/WASM functions.</div>
@@ -2014,10 +2023,10 @@ flagbase fn deploy</button>
             </div>
           </div>
         </div>
-      </div>`;
+      </div>`);
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+    setContent(gen, `<div class="card"><div class="table-wrap">
       <table>
         <thead><tr><th>Name</th><th>Runtime</th><th>Status</th><th>Created</th><th></th></tr></thead>
         <tbody>${fns.map(fn => `<tr>
@@ -2038,9 +2047,9 @@ flagbase fn deploy</button>
           </td>
         </tr>`).join('')}</tbody>
       </table>
-    </div></div>`;
+    </div></div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -2060,7 +2069,7 @@ function formatDuration(start, end) {
   return (ms / 1000).toFixed(1) + 's';
 }
 
-async function loadFunctionDetail(fn) {
+async function loadFunctionDetail(fn, gen) {
   setActions(`
     <button class="btn btn-ghost btn-sm" onclick="closeFunctionDetail()">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
@@ -2122,7 +2131,7 @@ async function loadFunctionDetail(fn) {
             <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px" onclick="deleteTrigger('${esc(t.id)}','${esc(fn.id)}','${esc(fn.name)}')">Delete</button>
           </td>
         </tr>`).join('');
-    document.getElementById('content').innerHTML = breadcrumb + metaCard + `
+    setContent(gen, breadcrumb + metaCard + `
       <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;margin-bottom:16px">
         <div class="card">
           <div class="card-header"><span class="card-title">Versions</span><span class="badge badge-blue">${versions.length}</span></div>
@@ -2158,10 +2167,10 @@ async function loadFunctionDetail(fn) {
           <span style="font-size:11px;color:var(--text-3)">Published via <code style="color:var(--primary)">PublishMetric()</code></span>
         </div>
         <div id="fn-metrics-tab" class="card-body"></div>
-      </div>`;
-    loadFunctionMetrics(fn.id);
+      </div>`);
+    if (gen === _navGen) loadFunctionMetrics(fn.id);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -2389,15 +2398,15 @@ async function confirmDeleteFn(id) {
 let currentTable = null;
 let _tableDefs = {};  // key → TableDef cache
 
-async function loadTables() {
+async function loadTables(gen) {
   if (currentTable) {
-    await loadTableDetail(currentTable);
+    await loadTableDetail(currentTable, gen);
   } else {
-    await loadTableList();
+    await loadTableList(gen);
   }
 }
 
-async function loadTableList() {
+async function loadTableList(gen) {
   setActions(`<button class="btn btn-primary btn-sm" onclick="openCreateTableModal()">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     New Table
@@ -2406,15 +2415,15 @@ async function loadTableList() {
   try {
     const tables = await GET('/api/v1/tables/');
     if (!tables || tables.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      setContent(gen, `<div class="empty-state">
         <div class="empty-icon">🗃️</div>
         <div class="empty-title">No tables yet</div>
         <div class="empty-text">Create a table to store structured data with a defined schema.</div>
         <button class="btn btn-primary" onclick="openCreateTableModal()">Create your first table</button>
-      </div>`;
+      </div>`);
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+    setContent(gen, `<div class="card"><div class="table-wrap">
       <table>
         <thead><tr><th>Key</th><th>Name</th><th>Description</th><th>Columns</th><th>Created</th><th></th></tr></thead>
         <tbody>${tables.map(t => `<tr>
@@ -2435,9 +2444,9 @@ async function loadTableList() {
           </td>
         </tr>`).join('')}</tbody>
       </table>
-    </div></div>`;
+    </div></div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -2451,7 +2460,7 @@ function closeTable() {
   loadTableList();
 }
 
-async function loadTableDetail(key) {
+async function loadTableDetail(key, gen) {
   document.getElementById('page-title').textContent = 'Tables';
   try {
     const def = await GET(`/api/v1/tables/${key}`);
@@ -2578,9 +2587,9 @@ async function loadTableDetail(key) {
       </div>`;
     }
 
-    document.getElementById('content').innerHTML = breadcrumb + schemaCard + isolationPanel + recordsCard;
+    setContent(gen, breadcrumb + schemaCard + isolationPanel + recordsCard);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -2881,9 +2890,9 @@ async function confirmDeleteRecord(key, id) {
 // ═══════════════════════ FRONTENDS ════════════════════════════
 let currentFrontend = null;
 
-async function loadFrontends() {
+async function loadFrontends(gen) {
   if (currentFrontend) {
-    await loadFrontendDetail(currentFrontend);
+    await loadFrontendDetail(currentFrontend, gen);
     return;
   }
   setActions(`<button class="btn btn-primary btn-sm" onclick="openCreateFrontendModal()">
@@ -2893,17 +2902,17 @@ async function loadFrontends() {
   try {
     const frontends = await GET('/api/v1/frontends/');
     if (!frontends || frontends.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      setContent(gen, `<div class="empty-state">
         <div class="empty-icon">🖥</div>
         <div class="empty-title">No frontends yet</div>
         <div class="empty-text">Create a frontend to host static files served at <code>/frontends/&lt;slug&gt;/</code>. Upload ZIP archives as versioned deployments.</div>
         <div style="margin-top:16px">
           <button class="btn btn-primary btn-sm" onclick="openCreateFrontendModal()">Create Frontend</button>
         </div>
-      </div>`;
+      </div>`);
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+    setContent(gen, `<div class="card"><div class="table-wrap">
       <table>
         <thead><tr><th>Name</th><th>Slug</th><th>Active Version</th><th>Created</th><th></th></tr></thead>
         <tbody>${frontends.map(f => `<tr>
@@ -2922,9 +2931,9 @@ async function loadFrontends() {
           </td>
         </tr>`).join('')}</tbody>
       </table>
-    </div></div>`;
+    </div></div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -2938,7 +2947,7 @@ function closeFrontendDetail() {
   loadFrontends();
 }
 
-async function loadFrontendDetail(f) {
+async function loadFrontendDetail(f, gen) {
   const server = window.location.origin;
   setActions(`
     <button class="btn btn-ghost btn-sm" onclick="closeFrontendDetail()">
@@ -3004,7 +3013,7 @@ flagbase fe deploy --label v1</button>
         </div>
       </div>
     </div>`;
-    document.getElementById('content').innerHTML = breadcrumb + metaCard + `
+    setContent(gen, breadcrumb + metaCard + `
       <div class="card">
         <div class="card-header">
           <span class="card-title">Versions</span><span class="badge badge-blue">${versions ? versions.length : 0}</span>
@@ -3017,9 +3026,9 @@ flagbase fe deploy --label v1</button>
           <thead><tr><th>Label</th><th>ID</th><th>Files</th><th>Status</th><th></th></tr></thead>
           <tbody>${versionRows}</tbody>
         </table></div>
-      </div>` + cliCard;
+      </div>` + cliCard);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -3141,7 +3150,7 @@ async function deleteFrontend(id, name) {
 // ═══════════════════════ MONITORING ══════════════════════════
 let currentTrace = null;
 
-async function loadMonitoring() {
+async function loadMonitoring(gen) {
   setActions('');
   try {
     const [summary, anomalies] = await Promise.all([
@@ -3194,7 +3203,7 @@ async function loadMonitoring() {
           </tr>`;
         }).join('');
 
-    document.getElementById('content').innerHTML = statsHtml + `
+    setContent(gen, statsHtml + `
       <div class="monitor-grid">
         <div class="card">
           <div class="card-header">
@@ -3219,10 +3228,11 @@ async function loadMonitoring() {
           <button class="btn btn-ghost btn-sm" onclick="navigate('traces')">View all →</button>
         </div>
         <div id="monitor-traces-preview"><div class="loading"><div class="spin"></div> Loading…</div></div>
-      </div>`;
+      </div>`);
 
     // Load recent traces preview
     const traces = await GET('/admin/api/traces?limit=5').catch(() => []);
+    if (gen !== _navGen) return;
     const traceRows = traces.length === 0
       ? `<div style="padding:20px;text-align:center;color:var(--text-3)">No traces yet. Invoke a function to generate traces.</div>`
       : `<div class="table-wrap"><table>
@@ -3236,9 +3246,10 @@ async function loadMonitoring() {
             <td style="color:var(--text-2)">${fmtDatetime(t.started_at)}</td>
           </tr>`).join('')}</tbody>
         </table></div>`;
-    document.getElementById('monitor-traces-preview').innerHTML = traceRows;
+    const previewEl = document.getElementById('monitor-traces-preview');
+    if (previewEl) previewEl.innerHTML = traceRows;
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -3252,23 +3263,23 @@ async function resolveAnomaly(id) {
 
 // ═══════════════════════ TRACES ═══════════════════════════════
 
-async function loadTraces() {
+async function loadTraces(gen) {
   if (currentTrace) {
-    await loadTraceDetail(currentTrace);
+    await loadTraceDetail(currentTrace, gen);
     return;
   }
   setActions('');
   try {
     const traces = await GET('/admin/api/traces?limit=100');
     if (!traces || traces.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty-state">
+      setContent(gen, `<div class="empty-state">
         <div class="empty-icon">〜</div>
         <div class="empty-title">No traces yet</div>
         <div class="empty-text">Invoke a function to generate distributed traces. Each invocation creates a trace showing every operation in the call chain.</div>
-      </div>`;
+      </div>`);
       return;
     }
-    document.getElementById('content').innerHTML = `<div class="card"><div class="table-wrap">
+    setContent(gen, `<div class="card"><div class="table-wrap">
       <table>
         <thead><tr><th>Trace ID</th><th>Type</th><th>Ref / Function</th><th>Events</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead>
         <tbody>${traces.map(t => `<tr style="cursor:pointer" onclick="openTrace(${JSON.stringify(t)})">
@@ -3281,9 +3292,9 @@ async function loadTraces() {
           <td style="color:var(--text-2)">${fmtDatetime(t.started_at)}</td>
         </tr>`).join('')}</tbody>
       </table>
-    </div></div>`;
+    </div></div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
@@ -3302,7 +3313,7 @@ function closeTrace() {
   loadTraces();
 }
 
-async function loadTraceDetail(trace) {
+async function loadTraceDetail(trace, gen) {
   setActions(`<button class="btn btn-ghost btn-sm" onclick="closeTrace()">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
     All Traces
@@ -3337,16 +3348,16 @@ async function loadTraceDetail(trace) {
       ).join('')}
     </div>`;
 
-    document.getElementById('content').innerHTML = breadcrumb + metaCard + `
+    setContent(gen, breadcrumb + metaCard + `
       <div class="card">
         <div class="card-header"><span class="card-title">Span Waterfall</span></div>
         <div class="card-body">
           ${legendHtml}
           <div class="waterfall-wrap">${waterfallHtml}</div>
         </div>
-      </div>`;
+      </div>`);
   } catch(err) {
-    document.getElementById('content').innerHTML = `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`;
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
   }
 }
 
