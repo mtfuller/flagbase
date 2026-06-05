@@ -371,6 +371,10 @@ td.text-primary{color:var(--text)}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         Functions
       </div>
+      <div class="nav-item" data-page="packages" onclick="navigate('packages')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        Packages
+      </div>
       <div class="nav-item" data-page="tables" onclick="navigate('tables')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
         Tables
@@ -432,8 +436,16 @@ td.text-primary{color:var(--text)}
 const S = {
   token: localStorage.getItem('fb_token'),
   email: localStorage.getItem('fb_email'),
+  role: localStorage.getItem('fb_role') || 'user',
   page: 'dashboard',
 };
+
+function decodeJWTRole(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload.role || 'user';
+  } catch { return 'user'; }
+}
 
 // ═══════════════════════ API ══════════════════════════════════
 async function req(method, path, body) {
@@ -505,7 +517,7 @@ function fmtBytes(n) {
 }
 
 // ═══════════════════════ ROUTER ══════════════════════════════
-const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', identity:'Identity', functions:'Functions', tables:'Tables', frontends:'Frontends', monitoring:'Monitoring', traces:'Traces'};
+const pageTitles = {dashboard:'Dashboard', flags:'Feature Flags', gateway:'Gateway Routes', storage:'Storage Buckets', identity:'Identity', functions:'Functions', tables:'Tables', frontends:'Frontends', monitoring:'Monitoring', traces:'Traces', packages:'Package Registry'};
 
 let _navGen = 0;
 
@@ -522,6 +534,7 @@ function navigate(page) {
   if (page !== 'identity') identityTab = 'users';
   if (page !== 'traces') currentTrace = null;
   S.page = page;
+
   history.pushState({page}, '', '/admin/' + page);
   document.getElementById('page-title').textContent = pageTitles[page] || page;
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -545,6 +558,7 @@ function loadPage(page) {
     frontends: loadFrontends,
     monitoring: loadMonitoring,
     traces: loadTraces,
+    packages: loadPackages,
   }[page] || loadDashboard)(gen);
 }
 
@@ -587,9 +601,10 @@ function showApp() {
 }
 
 function logout() {
-  S.token = null; S.email = null;
+  S.token = null; S.email = null; S.role = 'user';
   localStorage.removeItem('fb_token');
   localStorage.removeItem('fb_email');
+  localStorage.removeItem('fb_role');
   showScreen('login');
 }
 
@@ -605,8 +620,10 @@ document.getElementById('setup-form').addEventListener('submit', async e => {
     });
     S.token = data.token;
     S.email = document.getElementById('setup-email').value.trim();
+    S.role = decodeJWTRole(S.token);
     localStorage.setItem('fb_token', S.token);
     localStorage.setItem('fb_email', S.email);
+    localStorage.setItem('fb_role', S.role);
     toast('Admin account created! Welcome to Flagbase.');
     showApp();
   } catch(err) {
@@ -623,8 +640,10 @@ document.getElementById('login-form').addEventListener('submit', async e => {
     const email = document.getElementById('login-email').value.trim();
     const data = await POST('/auth/login', {email, password: document.getElementById('login-password').value});
     S.token = data.token; S.email = email;
+    S.role = decodeJWTRole(S.token);
     localStorage.setItem('fb_token', S.token);
     localStorage.setItem('fb_email', S.email);
+    localStorage.setItem('fb_role', S.role);
     showApp();
   } catch(err) {
     toast(err.message, 'error');
@@ -1732,6 +1751,58 @@ async function removeMember(groupId, userId, groupName) {
 // ═══════════════════════ MONACO EDITOR ═══════════════════════════════
 let _monacoEditor = null;
 let _monacoReady = false;
+let _pkgCompletionDisposable = null;
+
+// Fetches approved packages and updates Monaco's require() types + completion provider.
+// Called every time the editor opens so newly approved packages are reflected immediately.
+function refreshPackageTypes() {
+  const authHeaders = S.token ? { 'Authorization': 'Bearer ' + S.token } : {};
+  fetch('/admin/api/packages', { headers: authHeaders })
+    .then(r => r.ok ? r.json() : [])
+    .then(pkgs => {
+      const available = (pkgs || []).filter(p => p.status === 'available');
+
+      if (_pkgCompletionDisposable) {
+        _pkgCompletionDisposable.dispose();
+        _pkgCompletionDisposable = null;
+      }
+
+      let pkgDts;
+      if (available.length > 0) {
+        const names = available.map(p => JSON.stringify(p.name)).join(' | ');
+        const listLines = available.map(p => ` * - \`${p.name}@${p.version}\``).join('\n');
+        pkgDts = `/**\n * Packages available via require() — approved in the Flagbase Package Registry:\n${listLines}\n */\ndeclare function require(packageName: ${names}): any;\n`;
+
+        _pkgCompletionDisposable = monaco.languages.registerCompletionItemProvider('javascript', {
+          triggerCharacters: ["'", '"'],
+          provideCompletionItems(model, position) {
+            const lineText = model.getValueInRange({
+              startLineNumber: position.lineNumber,
+              startColumn: 1,
+              endLineNumber: position.lineNumber,
+              endColumn: position.column,
+            });
+            if (!/require\s*\(\s*["']/.test(lineText)) return { suggestions: [] };
+            return {
+              suggestions: available.map(p => ({
+                label: p.name,
+                kind: monaco.languages.CompletionItemKind.Module,
+                detail: `v${p.version} · approved`,
+                insertText: p.name,
+                documentation: { value: `**${p.name}** \`v${p.version}\`\n\nApproved package from the Flagbase Package Registry.\n\nUsage:\n\`\`\`js\nconst ${p.name} = require('${p.name}');\n\`\`\`` },
+                sortText: '0' + p.name,
+              })),
+            };
+          },
+        });
+      } else {
+        pkgDts = `/** No packages approved yet. Visit the Package Registry to request one. */\ndeclare function require(packageName: string): any;\n`;
+      }
+
+      monaco.languages.typescript.javascriptDefaults.addExtraLib(pkgDts, 'ts:flagbase-packages.d.ts');
+    })
+    .catch(() => {});
+}
 
 function defineFlagbaseTheme() {
   monaco.editor.defineTheme('flagbase-dark', {
@@ -1792,6 +1863,7 @@ function mountEditor(containerId, source) {
     });
   };
   if (_monacoReady) {
+    refreshPackageTypes();
     doMount();
   } else {
     require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' } });
@@ -1807,11 +1879,13 @@ function mountEditor(containerId, source) {
           });
           defineFlagbaseTheme();
           _monacoReady = true;
+          refreshPackageTypes();
           doMount();
         })
         .catch(() => {
           defineFlagbaseTheme();
           _monacoReady = true;
+          refreshPackageTypes();
           doMount();
         });
     });
@@ -1882,26 +1956,67 @@ async function saveFnFromEditor(existingId) {
   }
 }
 
-function openNewFunctionEditor() {
-  if (_monacoEditor) { _monacoEditor.dispose(); _monacoEditor = null; }
-  setActions('');
-  document.getElementById('page-title').textContent = 'Functions';
-  document.getElementById('content').innerHTML = `
-    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px)">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-        <button class="btn btn-ghost btn-sm" onclick="closeFunctionDetail()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-          Cancel
-        </button>
+// SDK snippets inserted into the editor via the palette toolbar.
+const SDK_SNIPPETS = [
+  { label: 'flag.evaluate', code: `const enabled = flagbase.flag.evaluate('my-flag');\nif (enabled) {\n  // feature is on\n}` },
+  { label: 'flag.variant', code: `const variant = flagbase.flag.variant('my-flag');\nconsole.log('variant:', variant);` },
+  { label: 'http.fetch', code: `const res = flagbase.http.fetch({\n  method: 'GET',\n  url: 'https://api.example.com/data',\n  headers: { 'Accept': 'application/json' },\n});\nconst data = JSON.parse(res.body);\nconsole.log('status', res.status);` },
+  { label: 'table.query', code: `const rows = flagbase.table.query('my-table', { limit: 10, offset: 0 });\nrows.forEach(r => console.log(JSON.stringify(r)));` },
+  { label: 'table.put', code: `const saved = flagbase.table.put('my-table', {\n  name: 'example',\n  value: 42,\n});\nconsole.log('saved id:', saved._id);` },
+  { label: 'bucket.get/put', code: `// Write\nflagbase.bucket.put('my-bucket', 'result.json', JSON.stringify({ ok: true }));\n// Read\nconst raw = flagbase.bucket.get('my-bucket', 'result.json');\nconst obj = JSON.parse(raw || '{}');` },
+  { label: 'metrics.publish', code: `flagbase.metrics.publish('my.metric', 42, { env: 'prod' });` },
+  { label: 'context.caller', code: `const caller = flagbase.context.caller();\nconsole.log('user:', caller.userId, 'role:', caller.role);` },
+  { label: 'require(package)', code: `// Type require('  to see approved packages from the Package Registry.\n// const dayjs = require('dayjs');\n// console.log(dayjs().format('YYYY-MM-DD'));` },
+];
+
+function insertEditorSnippet(code) {
+  if (!_monacoEditor) return;
+  const pos = _monacoEditor.getPosition();
+  _monacoEditor.executeEdits('snippet', [{
+    range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+    text: '\n' + code + '\n',
+    forceMoveMarkers: true,
+  }]);
+  _monacoEditor.focus();
+}
+
+function editorToolbarHTML(saveCall, cancelCall) {
+  const snippetBtns = SDK_SNIPPETS.map(s =>
+    `<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;font-family:'JetBrains Mono',monospace;white-space:nowrap;color:var(--primary)" onclick="insertEditorSnippet(${JSON.stringify(s.code)})" title="Insert ${s.label} snippet">${esc(s.label)}</button>`
+  ).join('');
+  return `
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        ${cancelCall}
         <input id="fn-editor-name" class="form-input" placeholder="Function name" style="width:220px" required>
         <input id="fn-editor-desc" class="form-input" placeholder="Description (optional)" style="flex:1;min-width:160px">
-        <button id="fn-save-btn" class="btn btn-primary btn-sm" onclick="saveFnFromEditor(null)">
+        <button id="fn-save-btn" class="btn btn-primary btn-sm" onclick="${saveCall}">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
           Save &amp; Deploy
         </button>
       </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius);overflow-x:auto">
+        <span style="font-size:10px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;white-space:nowrap;margin-right:4px">Insert snippet</span>
+        ${snippetBtns}
+        <a href="/admin/packages" onclick="event.preventDefault();navigate('packages')" style="margin-left:auto;font-size:11px;color:var(--text-3);text-decoration:none;white-space:nowrap" title="Manage approved packages">+ request package</a>
+      </div>
+    </div>`;
+}
+
+function openNewFunctionEditor() {
+  if (_monacoEditor) { _monacoEditor.dispose(); _monacoEditor = null; }
+  setActions('');
+  document.getElementById('page-title').textContent = 'Functions';
+  const cancelBtn = `<button class="btn btn-ghost btn-sm" onclick="closeFunctionDetail()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+    Cancel
+  </button>`;
+  document.getElementById('content').innerHTML = `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px)">
+      ${editorToolbarHTML('saveFnFromEditor(null)', cancelBtn)}
       <div id="fn-editor-container" style="flex:1;border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--border)"></div>
     </div>`;
+  document.getElementById('fn-editor-name').value = '';
   mountEditor('fn-editor-container', JS_STARTER);
 }
 
@@ -1909,22 +2024,17 @@ function openEditFunctionEditor(fn) {
   if (_monacoEditor) { _monacoEditor.dispose(); _monacoEditor = null; }
   setActions('');
   document.getElementById('page-title').textContent = 'Functions';
+  const cancelBtn = `<button class="btn btn-ghost btn-sm" onclick="openFunctionDetail(currentFunction)">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+    Cancel
+  </button>`;
   document.getElementById('content').innerHTML = `
     <div style="display:flex;flex-direction:column;height:calc(100vh - 120px)">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-        <button class="btn btn-ghost btn-sm" onclick="openFunctionDetail(currentFunction)">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-          Cancel
-        </button>
-        <input id="fn-editor-name" class="form-input" placeholder="Function name" style="width:220px" value="${esc(fn.name)}" required>
-        <input id="fn-editor-desc" class="form-input" placeholder="Description (optional)" style="flex:1;min-width:160px" value="${esc(fn.description||'')}">
-        <button id="fn-save-btn" class="btn btn-primary btn-sm" onclick="saveFnFromEditor('${esc(fn.id)}')">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          Save &amp; Deploy
-        </button>
-      </div>
+      ${editorToolbarHTML(`saveFnFromEditor('${esc(fn.id)}')`, cancelBtn)}
       <div id="fn-editor-container" style="flex:1;border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--border)"></div>
     </div>`;
+  document.getElementById('fn-editor-name').value = fn.name || '';
+  document.getElementById('fn-editor-desc').value = fn.description || '';
   mountEditor('fn-editor-container', fn.source || JS_STARTER);
 }
 
@@ -2392,6 +2502,122 @@ async function confirmDeleteFn(id) {
     await DEL('/admin/api/functions/' + id);
     closeModal(); toast('Function deleted'); loadFunctions();
   } catch(err) { toast(err.message, 'error'); }
+}
+
+// ═══════════════════════ PACKAGES ════════════════════════════
+function pkgStatusBadge(status, errMsg) {
+  if (status === 'available') return `<span class="badge badge-green">available</span>`;
+  if (status === 'pending')   return `<span class="badge badge-yellow">pending</span>`;
+  if (status === 'bundling')  return `<span class="badge badge-blue">bundling…</span>`;
+  if (status === 'error')     return `<span class="badge badge-red" title="${esc(errMsg||'')}">error</span>`;
+  return `<span class="badge">${esc(status)}</span>`;
+}
+
+async function loadPackages(gen) {
+  const isAdmin = S.role === 'admin';
+  setActions(isAdmin
+    ? `<button class="btn btn-primary btn-sm" onclick="openRequestPackageModal()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Request Package
+       </button>`
+    : `<button class="btn btn-primary btn-sm" onclick="openRequestPackageModal()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Request Package
+       </button>`);
+  try {
+    const pkgs = await GET('/admin/api/packages');
+    if (!pkgs || pkgs.length === 0) {
+      setContent(gen, `<div class="empty-state">
+        <div class="empty-icon">📦</div>
+        <div class="empty-title">No packages in registry</div>
+        <div class="empty-text">Request an npm package to use it in your JavaScript functions. Admins approve requests before packages become available.</div>
+        <button class="btn btn-primary" onclick="openRequestPackageModal()">Request a package</button>
+        <div style="margin-top:20px;padding:16px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);max-width:520px;text-align:left">
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px">Usage in your function</div>
+          <pre style="font-size:12px;color:var(--primary);margin:0;font-family:'JetBrains Mono',monospace">const dayjs = require('dayjs');
+console.log(dayjs().format('YYYY-MM-DD'));</pre>
+        </div>
+      </div>`);
+      return;
+    }
+    const rows = pkgs.map(p => `<tr>
+      <td style="font-family:'JetBrains Mono',monospace;font-weight:600">${esc(p.name)}</td>
+      <td><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-3)">${esc(p.version)}</span></td>
+      <td>${pkgStatusBadge(p.status, p.error)}</td>
+      <td style="font-size:12px;color:var(--text-3)">${p.bundle_size > 0 ? fmtBytes(p.bundle_size) : '—'}</td>
+      <td style="font-size:12px;color:var(--text-2)">${fmtDate(p.requested_at)}</td>
+      <td style="display:flex;gap:6px;align-items:center">
+        ${isAdmin && p.status === 'pending' ? `<button class="btn btn-primary btn-sm" style="font-size:11px;padding:2px 10px" onclick="approvePackage('${esc(p.id)}','${esc(p.name)}','${esc(p.version)}')">Approve</button>` : ''}
+        ${p.status === 'error' ? `<span style="font-size:11px;color:var(--danger);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.error)}">${esc(p.error)}</span>` : ''}
+        ${isAdmin ? `<button class="btn btn-danger btn-sm btn-icon" onclick="deletePackage('${esc(p.id)}','${esc(p.name)}')" title="Remove">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+        </button>` : ''}
+      </td>
+    </tr>`).join('');
+    setContent(gen, `
+      <div style="margin-bottom:16px;padding:12px 16px;background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.2);border-radius:var(--radius-lg);font-size:12px;color:var(--text-2)">
+        Use approved packages in any JS function with <code style="color:var(--primary)">require('package-name')</code>.
+        Admins approve packages before they become available.
+        ${!isAdmin ? ' Submit a request and an admin will review it.' : ''}
+      </div>
+      <div class="card"><div class="table-wrap">
+        <table>
+          <thead><tr><th>Package</th><th>Version</th><th>Status</th><th>Bundle</th><th>Requested</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div></div>`);
+  } catch(err) {
+    setContent(gen, `<div class="empty-state"><div class="empty-title">Error</div><div class="empty-text">${esc(err.message)}</div></div>`);
+  }
+}
+
+function openRequestPackageModal() {
+  openModal('Request Package', `
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-2);margin-bottom:16px">Enter the npm package name and exact version to request. Admins will review and approve it before it becomes available in functions.</p>
+      <div class="form-group">
+        <label class="form-label">Package Name</label>
+        <input class="form-input" id="pkg-name" placeholder="e.g. lodash" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Version</label>
+        <input class="form-input" id="pkg-version" placeholder="e.g. 4.17.21" autocomplete="off">
+        <span class="form-hint">Pin an exact version for reproducible builds.</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitPackageRequest()">Submit Request</button>
+    </div>`);
+}
+
+async function submitPackageRequest() {
+  const name = (document.getElementById('pkg-name')||{}).value?.trim() || '';
+  const version = (document.getElementById('pkg-version')||{}).value?.trim() || '';
+  if (!name || !version) { toast('Package name and version are required', 'error'); return; }
+  try {
+    await POST('/admin/api/packages', { name, version });
+    closeModal();
+    toast('Package request submitted');
+    navigate('packages');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function approvePackage(id, name, version) {
+  try {
+    await PUT(`/admin/api/packages/${id}/approve`, {});
+    toast(`Approving ${name}@${version} — bundling in background…`);
+    navigate('packages');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deletePackage(id, name) {
+  if (!confirm(`Remove package "${name}" from the registry?`)) return;
+  try {
+    await DEL(`/admin/api/packages/${id}`);
+    toast('Package removed');
+    navigate('packages');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ═══════════════════════ TABLES ═══════════════════════════════

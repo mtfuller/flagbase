@@ -2,9 +2,11 @@ package function
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,10 +18,43 @@ import (
 	"github.com/dop251/goja"
 	"github.com/mtfuller/flagbase/internal/compiler"
 	"github.com/mtfuller/flagbase/internal/feature"
+	"github.com/mtfuller/flagbase/internal/packages"
 	"github.com/mtfuller/flagbase/internal/storage"
 	"github.com/mtfuller/flagbase/internal/table"
 	"github.com/mtfuller/flagbase/internal/tracing"
 )
+
+const srcPrefix = "zlib:"
+
+// compressSource zlib-compresses source text and base64-encodes it for TEXT column storage.
+func compressSource(src string) string {
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	_, _ = w.Write([]byte(src))
+	_ = w.Close()
+	return srcPrefix + base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+// decompressSource reverses compressSource; passes through uncompressed legacy values.
+func decompressSource(s string) string {
+	if !strings.HasPrefix(s, srcPrefix) {
+		return s
+	}
+	b, err := base64.StdEncoding.DecodeString(s[len(srcPrefix):])
+	if err != nil {
+		return s
+	}
+	r, err := zlib.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return s
+	}
+	defer r.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		return s
+	}
+	return string(out)
+}
 
 const functionsBucket = "functions"
 
@@ -81,12 +116,13 @@ type invMetrics struct {
 
 // Store manages function lifecycle: persistence, compilation, and invocation.
 type Store struct {
-	db     *sql.DB
-	store  *storage.LocalAdapter
-	engine *Engine
-	flags  *feature.Engine
-	tables *table.Engine
-	tracer *tracing.Recorder
+	db       *sql.DB
+	store    *storage.LocalAdapter
+	engine   *Engine
+	flags    *feature.Engine
+	tables   *table.Engine
+	tracer   *tracing.Recorder
+	packages *packages.Store
 }
 
 func NewStore(db *sql.DB, store *storage.LocalAdapter, engine *Engine, flags *feature.Engine) *Store {
@@ -98,6 +134,9 @@ func (s *Store) WithTables(t *table.Engine) { s.tables = t }
 
 // WithTracer injects the distributed tracing recorder.
 func (s *Store) WithTracer(t *tracing.Recorder) { s.tracer = t }
+
+// WithPackages injects the package registry so JS functions can require() approved packages.
+func (s *Store) WithPackages(p *packages.Store) { s.packages = p }
 
 // Create persists a new JavaScript function record and validates it synchronously.
 // For Go/WASM functions, use Upload instead.
@@ -224,6 +263,7 @@ func (s *Store) ListVersions(ctx context.Context, functionID string) ([]Function
 		if err := rows.Scan(&v.ID, &v.FunctionID, &v.Version, &v.Source, &v.CreatedAt); err != nil {
 			return nil, err
 		}
+		v.Source = decompressSource(v.Source)
 		versions = append(versions, v)
 	}
 	if versions == nil {
@@ -242,7 +282,11 @@ func (s *Store) GetVersion(ctx context.Context, functionID, versionID string) (*
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &v, err
+	if err != nil {
+		return nil, err
+	}
+	v.Source = decompressSource(v.Source)
+	return &v, nil
 }
 
 // InvokeStream executes a ready function, writing its stdout output to w as
@@ -324,6 +368,7 @@ func (s *Store) List(ctx context.Context) ([]Function, error) {
 			&f.Runtime, &f.Status, &f.Error, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			return nil, err
 		}
+		f.Source = decompressSource(f.Source)
 		fns = append(fns, f)
 	}
 	if fns == nil {
@@ -343,7 +388,11 @@ func (s *Store) Get(ctx context.Context, id string) (*Function, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &f, err
+	if err != nil {
+		return nil, err
+	}
+	f.Source = decompressSource(f.Source)
+	return &f, nil
 }
 
 // Delete removes a function and its stored artifact.
@@ -532,6 +581,31 @@ func (s *Store) buildHostDeps(ctx context.Context, fnID, invID string) *HostDeps
 	}
 }
 
+// buildPackagePreamble assembles a require() shim + all available approved packages
+// as a JavaScript preamble to be run before user source.
+func (s *Store) buildPackagePreamble(ctx context.Context) string {
+	if s.packages == nil {
+		return ""
+	}
+	pkgs, err := s.packages.ListAvailable(ctx)
+	if err != nil || len(pkgs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("var __pkgs={};")
+	sb.WriteString("function require(n){if(__pkgs[n]!==undefined)return __pkgs[n];")
+	sb.WriteString(`throw new Error('Package "'+n+'" not in registry. Ask your admin to approve it.');`)
+	sb.WriteString("}\n")
+	for _, p := range pkgs {
+		bundle, err := s.packages.LoadBundle(ctx, p.ID)
+		if err != nil || bundle == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "__pkgs[%q]=(function(){var module={exports:{}};var exports=module.exports;%s;return module.exports;})();\n", p.Name, bundle)
+	}
+	return sb.String()
+}
+
 func (s *Store) invokeJS(ctx context.Context, fn *Function, timeout time.Duration) ([]byte, error) {
 	vm := goja.New()
 
@@ -550,9 +624,11 @@ func (s *Store) invokeJS(ctx context.Context, fn *Function, timeout time.Duratio
 
 	s.buildJSHostObject(ctx, vm)
 
+	preamble := s.buildPackagePreamble(ctx)
 	done := make(chan error, 1)
 	go func() {
-		_, err := vm.RunString(fn.Source)
+		src := preamble + fn.Source
+		_, err := vm.RunString(src)
 		if err != nil {
 			done <- err
 			return
@@ -815,7 +891,7 @@ func (s *Store) Update(ctx context.Context, id, name, description, source string
 
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE functions SET name = ?, description = ?, source = ?, status = 'compiling', error = '', updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?`, name, description, source, id)
+		WHERE id = ?`, name, description, compressSource(source), id)
 	if err != nil {
 		return nil, fmt.Errorf("updating function: %w", err)
 	}
@@ -854,7 +930,7 @@ func (s *Store) insert(ctx context.Context, fn *Function) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO functions (id, name, description, language, source, runtime, status, error)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		fn.ID, fn.Name, fn.Description, fn.Language, fn.Source, fn.Runtime, fn.Status, fn.Error)
+		fn.ID, fn.Name, fn.Description, fn.Language, compressSource(fn.Source), fn.Runtime, fn.Status, fn.Error)
 	return err
 }
 
@@ -895,19 +971,19 @@ func (s *Store) createVersion(ctx context.Context, functionID string) (*Function
 		return nil, fmt.Errorf("generating version id: %w", err)
 	}
 
-	// Snapshot source at deploy time for diff view.
-	var source string
-	_ = s.db.QueryRowContext(ctx, `SELECT source FROM functions WHERE id = ?`, functionID).Scan(&source)
+	// Snapshot source at deploy time (already compressed in functions table).
+	var storedSource string
+	_ = s.db.QueryRowContext(ctx, `SELECT source FROM functions WHERE id = ?`, functionID).Scan(&storedSource)
 
 	v := &FunctionVersion{
 		ID:         id,
 		FunctionID: functionID,
 		Version:    maxVersion + 1,
-		Source:     source,
+		Source:     decompressSource(storedSource),
 	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO function_versions (id, function_id, version, source) VALUES (?, ?, ?, ?)`,
-		v.ID, v.FunctionID, v.Version, v.Source)
+		v.ID, v.FunctionID, v.Version, compressSource(v.Source))
 	if err != nil {
 		return nil, fmt.Errorf("inserting version: %w", err)
 	}

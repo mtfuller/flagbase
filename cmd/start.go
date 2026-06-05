@@ -19,6 +19,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/function"
 	"github.com/mtfuller/flagbase/internal/iam"
 	"github.com/mtfuller/flagbase/internal/logger"
+	"github.com/mtfuller/flagbase/internal/packages"
 	"github.com/mtfuller/flagbase/internal/storage"
 	"github.com/mtfuller/flagbase/internal/table"
 	"github.com/mtfuller/flagbase/internal/tracing"
@@ -84,8 +85,11 @@ func runStart(_ *cobra.Command, _ []string) error {
 	defer fnEngine.Close(context.Background())
 	tracer := tracing.NewRecorder(db)
 
+	pkgStore := packages.NewStore(db, store)
+
 	fnStore := function.NewStore(db, store, fnEngine, featureEng)
 	fnStore.WithTracer(tracer)
+	fnStore.WithPackages(pkgStore)
 
 	tableEng := table.NewEngine(db)
 	fnStore.WithTables(tableEng)
@@ -124,7 +128,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		fmt.Println()
 	}
 
-	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr, fnStore, frontendSvc, tableEng, triggerEng, tracer)
+	srv := api.NewServer(cfg, db, iamSvc, featureEng, store, bus, bgWorker, setupMgr, fnStore, frontendSvc, tableEng, triggerEng, tracer, pkgStore)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
