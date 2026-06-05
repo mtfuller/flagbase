@@ -168,6 +168,7 @@ func NewServer(
 		// Package registry — devs request; admins approve
 		r.Get("/packages", ph.ListPackages)
 		r.Post("/packages", ph.RequestPackage)
+		r.Get("/packages/{id}/types", ph.GetPackageTypes)
 		r.With(RequireRole("admin")).Put("/packages/{id}/approve", ph.ApprovePackage)
 		r.With(RequireRole("admin")).Delete("/packages/{id}", ph.DeletePackage)
 	})

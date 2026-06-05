@@ -72,3 +72,18 @@ func (h *PackageHandlers) DeletePackage(w http.ResponseWriter, r *http.Request) 
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *PackageHandlers) GetPackageTypes(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	dts, err := h.Packages.LoadTypes(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if dts == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(dts))
+}
