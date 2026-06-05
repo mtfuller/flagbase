@@ -1751,6 +1751,58 @@ async function removeMember(groupId, userId, groupName) {
 // ═══════════════════════ MONACO EDITOR ═══════════════════════════════
 let _monacoEditor = null;
 let _monacoReady = false;
+let _pkgCompletionDisposable = null;
+
+// Fetches approved packages and updates Monaco's require() types + completion provider.
+// Called every time the editor opens so newly approved packages are reflected immediately.
+function refreshPackageTypes() {
+  const authHeaders = S.token ? { 'Authorization': 'Bearer ' + S.token } : {};
+  fetch('/admin/api/packages', { headers: authHeaders })
+    .then(r => r.ok ? r.json() : [])
+    .then(pkgs => {
+      const available = (pkgs || []).filter(p => p.status === 'available');
+
+      if (_pkgCompletionDisposable) {
+        _pkgCompletionDisposable.dispose();
+        _pkgCompletionDisposable = null;
+      }
+
+      let pkgDts;
+      if (available.length > 0) {
+        const names = available.map(p => JSON.stringify(p.name)).join(' | ');
+        const listLines = available.map(p => ` * - \`${p.name}@${p.version}\``).join('\n');
+        pkgDts = `/**\n * Packages available via require() — approved in the Flagbase Package Registry:\n${listLines}\n */\ndeclare function require(packageName: ${names}): any;\n`;
+
+        _pkgCompletionDisposable = monaco.languages.registerCompletionItemProvider('javascript', {
+          triggerCharacters: ["'", '"'],
+          provideCompletionItems(model, position) {
+            const lineText = model.getValueInRange({
+              startLineNumber: position.lineNumber,
+              startColumn: 1,
+              endLineNumber: position.lineNumber,
+              endColumn: position.column,
+            });
+            if (!/require\s*\(\s*["']/.test(lineText)) return { suggestions: [] };
+            return {
+              suggestions: available.map(p => ({
+                label: p.name,
+                kind: monaco.languages.CompletionItemKind.Module,
+                detail: `v${p.version} · approved`,
+                insertText: p.name,
+                documentation: { value: `**${p.name}** \`v${p.version}\`\n\nApproved package from the Flagbase Package Registry.\n\nUsage:\n\`\`\`js\nconst ${p.name} = require('${p.name}');\n\`\`\`` },
+                sortText: '0' + p.name,
+              })),
+            };
+          },
+        });
+      } else {
+        pkgDts = `/** No packages approved yet. Visit the Package Registry to request one. */\ndeclare function require(packageName: string): any;\n`;
+      }
+
+      monaco.languages.typescript.javascriptDefaults.addExtraLib(pkgDts, 'ts:flagbase-packages.d.ts');
+    })
+    .catch(() => {});
+}
 
 function defineFlagbaseTheme() {
   monaco.editor.defineTheme('flagbase-dark', {
@@ -1811,6 +1863,7 @@ function mountEditor(containerId, source) {
     });
   };
   if (_monacoReady) {
+    refreshPackageTypes();
     doMount();
   } else {
     require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' } });
@@ -1826,11 +1879,13 @@ function mountEditor(containerId, source) {
           });
           defineFlagbaseTheme();
           _monacoReady = true;
+          refreshPackageTypes();
           doMount();
         })
         .catch(() => {
           defineFlagbaseTheme();
           _monacoReady = true;
+          refreshPackageTypes();
           doMount();
         });
     });
@@ -1911,7 +1966,7 @@ const SDK_SNIPPETS = [
   { label: 'bucket.get/put', code: `// Write\nflagbase.bucket.put('my-bucket', 'result.json', JSON.stringify({ ok: true }));\n// Read\nconst raw = flagbase.bucket.get('my-bucket', 'result.json');\nconst obj = JSON.parse(raw || '{}');` },
   { label: 'metrics.publish', code: `flagbase.metrics.publish('my.metric', 42, { env: 'prod' });` },
   { label: 'context.caller', code: `const caller = flagbase.context.caller();\nconsole.log('user:', caller.userId, 'role:', caller.role);` },
-  { label: 'require(package)', code: `// Package must be approved in the Package Registry first.\nconst _ = require('lodash');\nconsole.log(_.VERSION);` },
+  { label: 'require(package)', code: `// Type require('  to see approved packages from the Package Registry.\n// const dayjs = require('dayjs');\n// console.log(dayjs().format('YYYY-MM-DD'));` },
 ];
 
 function insertEditorSnippet(code) {

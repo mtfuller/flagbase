@@ -547,15 +547,6 @@ declare function handle(): void;
 declare const console: {
   log(...args: unknown[]): void;
 };
-
-/**
- * Require an approved package from the Flagbase Package Registry.
- * Packages must be approved by an admin before they can be used.
- * @example
- * const dayjs = require('dayjs');
- * console.log(dayjs().format('YYYY-MM-DD'));
- */
-declare function require(packageName: string): unknown;
 `
 
 // GetFlagbaseSDKTypes serves the TypeScript ambient declarations for the flagbase
