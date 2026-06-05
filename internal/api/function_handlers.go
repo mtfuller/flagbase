@@ -392,36 +392,88 @@ const flagbaseSDKTypes = `
 /** flagbase host SDK — available in every JavaScript function. */
 declare namespace flagbase {
   namespace flag {
-    /** Evaluate a feature flag and return true/false for the current caller. */
+    /**
+     * Evaluate a feature flag and return true/false for the current caller.
+     * @example
+     * const enabled = flagbase.flag.evaluate('dark-mode');
+     * if (enabled) { console.log('dark mode on'); }
+     */
     function evaluate(key: string): boolean;
-    /** Evaluate a feature flag and return the matched variant key string. */
+    /**
+     * Evaluate a feature flag and return the matched variant key string.
+     * @example
+     * const variant = flagbase.flag.variant('checkout-flow');
+     * console.log('variant:', variant); // e.g. "v2" or "control"
+     */
     function variant(key: string): string;
   }
   namespace bucket {
-    /** Retrieve an object from storage; returns null if not found. */
+    /**
+     * Retrieve an object from storage; returns null if not found.
+     * @example
+     * const data = flagbase.bucket.get('my-bucket', 'config.json');
+     * if (data) { const cfg = JSON.parse(data); }
+     */
     function get(bucket: string, key: string): string | null;
-    /** Store a string value in a bucket. Returns true on success. */
+    /**
+     * Store a string value in a bucket. Returns true on success.
+     * @example
+     * flagbase.bucket.put('my-bucket', 'result.json', JSON.stringify({ ok: true }));
+     */
     function put(bucket: string, key: string, data: string): boolean;
-    /** Delete an object from a bucket. Returns true on success. */
+    /**
+     * Delete an object from a bucket. Returns true on success.
+     * @example
+     * flagbase.bucket.delete('my-bucket', 'old-key');
+     */
     function delete(bucket: string, key: string): boolean;
-    /** List all object keys in a bucket. */
+    /**
+     * List all object keys in a bucket.
+     * @example
+     * const keys = flagbase.bucket.list('my-bucket');
+     * keys.forEach(k => console.log(k));
+     */
     function list(bucket: string): string[];
   }
   namespace table {
-    /** Retrieve a record by ID; returns null if not found. */
+    /**
+     * Retrieve a record by ID; returns null if not found.
+     * @example
+     * const user = flagbase.table.get('users', '123');
+     * if (user) { console.log(user.email); }
+     */
     function get(tableKey: string, id: string): Record<string, unknown> | null;
-    /** Insert or update a record; returns the saved record. */
+    /**
+     * Insert or update a record; returns the saved record with its generated _id.
+     * @example
+     * const saved = flagbase.table.put('orders', { product: 'widget', qty: 2 });
+     * console.log('saved with id', saved._id);
+     */
     function put(tableKey: string, data: Record<string, unknown>): Record<string, unknown> | null;
-    /** Delete a record by ID. Returns true on success. */
+    /**
+     * Delete a record by ID. Returns true on success.
+     * @example
+     * flagbase.table.delete('orders', '456');
+     */
     function delete(tableKey: string, id: string): boolean;
-    /** Query records with optional filters and pagination. */
+    /**
+     * Query records with optional pagination.
+     * @example
+     * const rows = flagbase.table.query('orders', { limit: 10, offset: 0 });
+     * rows.forEach(r => console.log(r));
+     */
     function query(tableKey: string, opts?: {
       limit?: number;
       offset?: number;
     }): Record<string, unknown>[];
   }
   namespace fn {
-    /** Synchronously invoke another function by ID and return its stdout. */
+    /**
+     * Synchronously invoke another function by ID and return its stdout.
+     * @example
+     * const result = flagbase.fn.invoke('abc123def456');
+     * console.log('child output:', result);
+     */
     function invoke(id: string): string;
   }
   namespace http {
@@ -436,11 +488,25 @@ declare namespace flagbase {
       headers: Record<string, string>;
       body: string;
     }
-    /** Make an outbound HTTP request with a 15-second timeout. */
+    /**
+     * Make an outbound HTTP request with a 15-second timeout.
+     * @example
+     * const res = flagbase.http.fetch({
+     *   method: 'POST',
+     *   url: 'https://api.example.com/notify',
+     *   headers: { 'Content-Type': 'application/json' },
+     *   body: JSON.stringify({ event: 'deploy' }),
+     * });
+     * console.log('status:', res.status, 'body:', res.body);
+     */
     function fetch(req: FetchRequest): FetchResponse;
   }
   namespace metrics {
-    /** Publish a custom numeric metric observable in the Monitoring dashboard. */
+    /**
+     * Publish a custom numeric metric observable in the Monitoring dashboard.
+     * @example
+     * flagbase.metrics.publish('checkout.duration_ms', 142, { region: 'us-east' });
+     */
     function publish(name: string, value: number, tags?: Record<string, string>): boolean;
   }
   namespace context {
@@ -451,11 +517,25 @@ declare namespace flagbase {
       email: string;
       groups: string[];
     }
-    /** Return the IAM identity of the user or trigger that invoked this function. */
+    /**
+     * Return the IAM identity of the user or trigger that invoked this function.
+     * @example
+     * const caller = flagbase.context.caller();
+     * console.log('invoked by', caller.email, 'role:', caller.role);
+     */
     function caller(): CallerContext;
-    /** Return the raw event payload bytes (UTF-8 string) passed to InvokeWithEvent. */
+    /**
+     * Return the raw event payload (UTF-8 string) passed to InvokeWithEvent.
+     * @example
+     * const payload = JSON.parse(flagbase.context.event() || '{}');
+     * console.log('event type:', payload.type);
+     */
     function event(): string;
-    /** Return the distributed trace ID for this invocation. */
+    /**
+     * Return the distributed trace ID for this invocation.
+     * @example
+     * console.log('trace:', flagbase.context.traceId());
+     */
     function traceId(): string;
   }
 }
@@ -467,6 +547,15 @@ declare function handle(): void;
 declare const console: {
   log(...args: unknown[]): void;
 };
+
+/**
+ * Require an approved package from the Flagbase Package Registry.
+ * Packages must be approved by an admin before they can be used.
+ * @example
+ * const dayjs = require('dayjs');
+ * console.log(dayjs().format('YYYY-MM-DD'));
+ */
+declare function require(packageName: string): unknown;
 `
 
 // GetFlagbaseSDKTypes serves the TypeScript ambient declarations for the flagbase

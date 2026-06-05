@@ -17,6 +17,7 @@ import (
 	"github.com/mtfuller/flagbase/internal/function"
 	"github.com/mtfuller/flagbase/internal/gateway"
 	"github.com/mtfuller/flagbase/internal/iam"
+	"github.com/mtfuller/flagbase/internal/packages"
 	"github.com/mtfuller/flagbase/internal/storage"
 	"github.com/mtfuller/flagbase/internal/table"
 	"github.com/mtfuller/flagbase/internal/tracing"
@@ -47,6 +48,7 @@ func NewServer(
 	tableEng *table.Engine,
 	triggerEng *trigger.Engine,
 	tracer *tracing.Recorder,
+	pkgStore *packages.Store,
 ) *Server {
 	gw := gateway.NewProxyHandler(featureEng)
 	h := &Handlers{IAM: iamSvc, Feature: featureEng, Metrics: metrics, Gateway: gw}
@@ -56,6 +58,7 @@ func NewServer(
 	th := &TableHandlers{Tables: tableEng}
 	trh := &TriggerHandlers{Triggers: triggerEng}
 	mh := &MonitoringHandlers{DB: db}
+	ph := &PackageHandlers{Packages: pkgStore}
 	_ = tracer
 
 	adminHTML, _ := web.FS.ReadFile("index.html")
@@ -161,6 +164,12 @@ func NewServer(
 		r.Post("/anomalies/{id}/resolve", mh.ResolveAnomaly)
 		r.Get("/functions/{id}/metrics", mh.GetFunctionMetrics)
 		r.Get("/functions/{id}/invocations/{invId}", mh.GetInvocationDetail)
+
+		// Package registry — devs request; admins approve
+		r.Get("/packages", ph.ListPackages)
+		r.Post("/packages", ph.RequestPackage)
+		r.With(RequireRole("admin")).Put("/packages/{id}/approve", ph.ApprovePackage)
+		r.With(RequireRole("admin")).Delete("/packages/{id}", ph.DeletePackage)
 	})
 
 	// Admin console SPA (served for all /admin/* paths not matched above)

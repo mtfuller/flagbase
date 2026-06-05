@@ -42,6 +42,19 @@ func migrateAdditive(db *sql.DB) error {
 		`ALTER TABLE function_invocations ADD COLUMN output_size_bytes INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE function_invocations ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE function_versions ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS packages (
+			id           TEXT PRIMARY KEY,
+			name         TEXT NOT NULL,
+			version      TEXT NOT NULL,
+			status       TEXT NOT NULL DEFAULT 'pending',
+			error        TEXT NOT NULL DEFAULT '',
+			bundle_size  INTEGER NOT NULL DEFAULT 0,
+			requested_by TEXT NOT NULL DEFAULT '',
+			approved_by  TEXT,
+			requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			approved_at  DATETIME,
+			UNIQUE(name, version)
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
