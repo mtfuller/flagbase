@@ -160,21 +160,29 @@ func (s *Service) ListUsers() ([]*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var users []*User
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.TenantID, &u.CreatedAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
+		users = append(users, &u)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close() // release the connection before nested queries
+
+	for _, u := range users {
 		groups, err := s.userGroupNames(u.ID)
 		if err != nil {
 			return nil, err
 		}
 		u.Groups = groups
-		users = append(users, &u)
 	}
-	return users, rows.Err()
+	return users, nil
 }
 
 // DeleteUser removes a user by ID. Returns ErrUserNotFound if no row was deleted.
