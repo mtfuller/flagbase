@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -100,14 +101,20 @@ func (s *Store) Approve(ctx context.Context, id, approvedBy string) (*Package, e
 		_, _ = s.db.ExecContext(bgCtx, `
 			UPDATE packages SET status='available', bundle_size=? WHERE id=?`,
 			len(bundle), id)
+
+		// Best-effort: fetch and store TypeScript definitions for editor IntelliSense.
+		if dts, typesErr := fetchTypes(pkg.Name, pkg.Version); typesErr == nil {
+			_ = s.storage.PutObject(bgCtx, packagesBucket, id+".d.ts", strings.NewReader(dts))
+		}
 	}()
 
 	return s.Get(ctx, id)
 }
 
-// Delete removes a package entry and its stored bundle.
+// Delete removes a package entry and its stored bundle and type definitions.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	_ = s.storage.DeleteObject(ctx, packagesBucket, id+".js")
+	_ = s.storage.DeleteObject(ctx, packagesBucket, id+".d.ts")
 	_, err := s.db.ExecContext(ctx, `DELETE FROM packages WHERE id=?`, id)
 	return err
 }
@@ -147,6 +154,24 @@ func (s *Store) LoadBundle(ctx context.Context, id string) (string, error) {
 	data, err := io.ReadAll(rc)
 	if err != nil {
 		return "", fmt.Errorf("reading bundle: %w", err)
+	}
+	return string(data), nil
+}
+
+// LoadTypes reads the stored TypeScript declarations for a package.
+// Returns an empty string (no error) when no types have been stored.
+func (s *Store) LoadTypes(ctx context.Context, id string) (string, error) {
+	rc, err := s.storage.GetObject(ctx, packagesBucket, id+".d.ts")
+	if err != nil {
+		if strings.Contains(err.Error(), "object not found") {
+			return "", nil
+		}
+		return "", fmt.Errorf("loading types: %w", err)
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return "", fmt.Errorf("reading types: %w", err)
 	}
 	return string(data), nil
 }
@@ -205,6 +230,46 @@ func fetchBundle(name, version string) (string, error) {
 		return "", fmt.Errorf("empty bundle for %s@%s", name, version)
 	}
 	return body, nil
+}
+
+// fetchTypes tries to retrieve TypeScript declarations for an npm package.
+// Strategy: (1) check package.json types/typings field, (2) try index.d.ts at
+// the package root, (3) fall back to @types/<name> from DefinitelyTyped.
+func fetchTypes(name, version string) (string, error) {
+	pkgJSON, err := httpGet(fmt.Sprintf("https://cdn.jsdelivr.net/npm/%s@%s/package.json", name, version))
+	if err == nil && pkgJSON != "" {
+		var meta struct {
+			Types   string `json:"types"`
+			Typings string `json:"typings"`
+		}
+		if json.Unmarshal([]byte(pkgJSON), &meta) == nil {
+			typesPath := meta.Types
+			if typesPath == "" {
+				typesPath = meta.Typings
+			}
+			if typesPath != "" {
+				typesPath = strings.TrimPrefix(typesPath, "./")
+				dts, err := httpGet(fmt.Sprintf("https://cdn.jsdelivr.net/npm/%s@%s/%s", name, version, typesPath))
+				if err == nil && strings.Contains(dts, "declare") {
+					return dts, nil
+				}
+			}
+		}
+	}
+
+	// Try a bare index.d.ts at the package root.
+	dts, err := httpGet(fmt.Sprintf("https://cdn.jsdelivr.net/npm/%s@%s/index.d.ts", name, version))
+	if err == nil && strings.Contains(dts, "declare") {
+		return dts, nil
+	}
+
+	// Fall back to DefinitelyTyped (@types/<name>).
+	dts, err = httpGet(fmt.Sprintf("https://cdn.jsdelivr.net/npm/@types/%s/index.d.ts", name))
+	if err == nil && strings.Contains(dts, "declare") {
+		return dts, nil
+	}
+
+	return "", fmt.Errorf("no type definitions found for %s@%s", name, version)
 }
 
 func httpGet(url string) (string, error) {
